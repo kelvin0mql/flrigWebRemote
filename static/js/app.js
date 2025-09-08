@@ -198,32 +198,24 @@ tuneBtn.addEventListener('click', function() {
   }
 });
 
-// PTT button handlers
-pttBtn.addEventListener('mousedown', function() {
-  activatePTT();
+// PTT button handler - changed to single click toggle
+pttBtn.addEventListener('click', function() {
+  togglePTT();
 });
 
-pttBtn.addEventListener('mouseup', function() {
-  deactivatePTT();
-});
+function togglePTT() {
+  pttActive = !pttActive;
 
-pttBtn.addEventListener('touchstart', function(e) {
-  e.preventDefault();
-  activatePTT();
-});
-
-pttBtn.addEventListener('touchend', function(e) {
-  e.preventDefault();
-  deactivatePTT();
-});
-
-function activatePTT() {
-  if (!pttActive) {
-    pttActive = true;
+  if (pttActive) {
     pttBtn.textContent = 'TRANSMITTING';
     pttBtn.className = 'btn btn-danger';
     pttBtn.style.backgroundColor = '#dc3545';
     socket.emit('ptt_control', { action: 'on' });
+  } else {
+    pttBtn.textContent = 'PTT';
+    pttBtn.className = 'btn btn-outline-danger';
+    pttBtn.style.backgroundColor = '';
+    socket.emit('ptt_control', { action: 'off' });
   }
 }
 
