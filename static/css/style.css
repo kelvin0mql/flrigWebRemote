@@ -17,7 +17,7 @@ body {
     font-weight: bold;
     color: #000;
     font-family: 'Courier New', monospace;
-    letter-spacing: 8px;
+    letter-spacing: 0; /* Remove excessive letter spacing */
     cursor: pointer;
     user-select: none;
     position: relative;
@@ -28,11 +28,11 @@ body {
 .clickable-frequency .digit {
     display: inline-block;
     position: relative;
-    padding: 15px 8px;
-    margin: 0 2px;
+    padding: 15px 3px; /* Reduced horizontal padding */
+    margin: 0; /* Remove margins between digits */
     border-radius: 8px;
     transition: all 0.1s ease;
-    min-width: 60px;
+    min-width: 45px; /* Reduced min-width */
     text-align: center;
     border: 2px solid transparent;
 }
@@ -48,10 +48,11 @@ body {
     transform: scale(1.05);
 }
 
-/* Decimal point styling */
+/* Decimal point styling - much smaller width */
 .clickable-frequency .digit:not([data-value]) {
-    padding: 15px 4px;
-    min-width: 20px;
+    padding: 15px 1px; /* Minimal padding for decimal point */
+    min-width: 15px; /* Much smaller width for decimal point */
+    margin: 0; /* No margins */
 }
 
 .control-group {
@@ -136,16 +137,22 @@ body {
     border-color: #bd2130;
 }
 
-/* Mobile responsiveness - still huge! */
+/* Mobile responsiveness */
 @media (max-width: 768px) {
     .clickable-frequency {
         font-size: 5rem;
-        letter-spacing: 4px;
+        letter-spacing: 0;
     }
 
     .clickable-frequency .digit {
-        padding: 12px 6px;
-        min-width: 45px;
+        padding: 12px 2px;
+        min-width: 35px;
+    }
+
+    /* Even smaller decimal point on mobile */
+    .clickable-frequency .digit:not([data-value]) {
+        padding: 12px 1px;
+        min-width: 12px;
     }
 
     .frequency-controls button, .frequency-controls-2 button {
@@ -159,16 +166,22 @@ body {
     }
 }
 
-/* iPad specific optimizations - HUGE */
+/* iPad specific optimizations */
 @media (min-width: 768px) and (max-width: 1024px) {
     .clickable-frequency {
         font-size: 10rem;
-        letter-spacing: 12px;
+        letter-spacing: 0;
     }
 
     .clickable-frequency .digit {
-        padding: 20px 10px;
-        min-width: 80px;
+        padding: 20px 4px;
+        min-width: 60px;
+    }
+
+    /* Smaller decimal point on iPad */
+    .clickable-frequency .digit:not([data-value]) {
+        padding: 20px 2px;
+        min-width: 20px;
     }
 
     .frequency-controls button, .frequency-controls-2 button {
@@ -178,16 +191,22 @@ body {
     }
 }
 
-/* Large screens - MASSIVE */
+/* Large screens */
 @media (min-width: 1025px) {
     .clickable-frequency {
         font-size: 12rem;
-        letter-spacing: 15px;
+        letter-spacing: 0;
     }
 
     .clickable-frequency .digit {
-        padding: 25px 15px;
-        min-width: 100px;
+        padding: 25px 6px;
+        min-width: 75px;
+    }
+
+    /* Smaller decimal point on large screens */
+    .clickable-frequency .digit:not([data-value]) {
+        padding: 25px 3px;
+        min-width: 25px;
     }
 }
 
