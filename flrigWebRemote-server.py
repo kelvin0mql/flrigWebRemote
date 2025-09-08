@@ -109,23 +109,23 @@ class FlrigWebRemote:
             self.initialize_connection()
 
     def set_frequency(self, frequency_hz):
-            """Set radio frequency."""
-            if not self.client:
-                return False, "Not connected to flrig"
+        """Set radio frequency."""
+        if not self.client:
+            return False, "Not connected to flrig"
 
-            try:
-                # Add debug logging
-                print(f"Attempting to set frequency to: {frequency_hz}Hz (type: {type(frequency_hz)})")
+        try:
+            # Add debug logging
+            print(f"Attempting to set frequency to: {frequency_hz}Hz (type: {type(frequency_hz)})")
 
-                # Ensure it's a proper integer - flrig might be picky about data types
-                freq_hz_int = int(float(frequency_hz))
-                print(f"Converted to integer: {freq_hz_int}")
+            # flrig expects a DOUBLE/FLOAT, not integer!
+            freq_hz_float = float(frequency_hz)
+            print(f"Converted to float: {freq_hz_float}")
 
-                self.client.rig.set_vfoA(freq_hz_int)
-                return True, "Frequency set successfully"
-            except Exception as e:
-                print(f"Error setting frequency: {e}")
-                return False, str(e)
+            self.client.rig.set_vfoA(freq_hz_float)
+            return True, "Frequency set successfully"
+        except Exception as e:
+            print(f"Error setting frequency: {e}")
+            return False, str(e)
 
     def tune_control(self, action):
         """Control tuner."""
