@@ -151,21 +151,22 @@ function updateClickableFrequency(freqKHz) {
 function handleDigitInteraction(digitEl, eventData) {
   // Check if the clicked element is a clickable digit
   if (!digitEl.classList.contains('clickable-digit')) {
-    console.log('Not a clickable digit:', digitEl); // Debug
+    console.log('Not a clickable digit:', digitEl.className); // Debug
     return;
   }
 
   const digitValue = parseInt(digitEl.getAttribute('data-value'));
   const currentDigit = parseInt(digitEl.getAttribute('data-digit'));
 
-  console.log(`Clicked digit: ${currentDigit}, value: ${digitValue}Hz`); // Debug
+  console.log(`*** DIGIT CLICK DETECTED ***`); // Make this very obvious
+  console.log(`Clicked digit: ${currentDigit}, value: ${digitValue}Hz`);
 
   // Determine if click was on upper or lower half
   const rect = digitEl.getBoundingClientRect();
   const clickY = eventData.clientY - rect.top;
   const isUpperHalf = clickY < (rect.height / 2);
 
-  console.log(`Click Y: ${clickY}, Height: ${rect.height}, Upper half: ${isUpperHalf}`); // Debug
+  console.log(`Click Y: ${clickY}, Height: ${rect.height}, Upper half: ${isUpperHalf}`);
 
   let newFrequency = currentFrequencyHz;
 
@@ -187,7 +188,8 @@ function handleDigitInteraction(digitEl, eventData) {
     }
   }
 
-  console.log(`Old frequency: ${currentFrequencyHz}Hz, New frequency: ${newFrequency}Hz`); // Debug
+  console.log(`*** SENDING FREQUENCY CHANGE ***`);
+  console.log(`Old frequency: ${currentFrequencyHz}Hz, New frequency: ${newFrequency}Hz`);
 
   // Bounds checking
   if (newFrequency < 1000000) newFrequency = 1000000; // 1 MHz minimum
