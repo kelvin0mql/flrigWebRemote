@@ -1,0 +1,114 @@
+body {
+    background-color: #f8f9fa;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+}
+
+.frequency-display {
+    background: linear-gradient(135deg, #e8f4f0 0%, #d1eddf 100%);
+    border: 2px solid #28a745;
+    border-radius: 10px;
+    padding: 20px;
+    margin: 20px auto;
+    max-width: 600px;
+}
+
+.main-frequency {
+    font-size: 3.5rem;
+    font-weight: bold;
+    color: #000;
+    font-family: 'Courier New', monospace;
+    letter-spacing: 2px;
+}
+
+.vfo-b-display {
+    font-size: 1.8rem;
+    font-weight: bold;
+    color: #6c757d;
+    font-family: 'Courier New', monospace;
+    background-color: #e9ecef;
+    border-radius: 5px;
+    padding: 10px;
+    display: inline-block;
+    min-width: 200px;
+}
+
+.control-group {
+    background-color: white;
+    border: 1px solid #dee2e6;
+    border-radius: 8px;
+    padding: 15px;
+    margin-bottom: 10px;
+}
+
+.mode-display, .bandwidth-display {
+    font-size: 1.2rem;
+    font-weight: bold;
+    color: #495057;
+    background-color: #f8f9fa;
+    border: 1px solid #dee2e6;
+    border-radius: 4px;
+    padding: 8px 12px;
+    text-align: center;
+}
+
+.swr-display {
+    font-size: 1.5rem;
+    font-weight: bold;
+    color: #dc3545;
+    text-align: center;
+    background-color: #f8f9fa;
+    border: 1px solid #dee2e6;
+    border-radius: 4px;
+    padding: 10px;
+}
+
+.band-buttons, .mode-buttons {
+    background-color: white;
+    border: 1px solid #dee2e6;
+    border-radius: 8px;
+    padding: 20px;
+}
+
+.form-range {
+    height: 8px;
+}
+
+.form-range::-webkit-slider-thumb {
+    height: 20px;
+    width: 20px;
+}
+
+#connection-status.bg-success {
+    background-color: #28a745 !important;
+}
+
+#connection-status.bg-danger {
+    background-color: #dc3545 !important;
+}
+
+/* Mobile responsiveness */
+@media (max-width: 768px) {
+    .main-frequency {
+        font-size: 2.5rem;
+    }
+
+    .vfo-b-display {
+        font-size: 1.4rem;
+    }
+
+    .container-fluid {
+        padding: 10px;
+    }
+}
+
+/* iPad specific optimizations */
+@media (min-width: 768px) and (max-width: 1024px) {
+    .main-frequency {
+        font-size: 4rem;
+    }
+
+    .frequency-controls button {
+        font-size: 1.1rem;
+        padding: 10px 20px;
+    }
+}
