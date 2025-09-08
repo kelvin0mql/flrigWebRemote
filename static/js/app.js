@@ -111,7 +111,7 @@ function updateClickableFrequency(freqKHz) {
     const digit = integerPart[i];
     const digitPower = numDigits - 1 - i; // Position from right (0-based)
     const digitValue = Math.pow(10, digitPower + 3); // +3 for kHz to Hz conversion
-    html += `<span class="digit" data-value="${digitValue}" data-digit="${digit}">${digit}</span>`;
+    html += `<span class="digit clickable-digit" data-value="${digitValue}" data-digit="${digit}">${digit}</span>`;
   }
 
   html += '<span class="digit">.</span>'; // Decimal point
@@ -120,27 +120,47 @@ function updateClickableFrequency(freqKHz) {
   for (let i = 0; i < decimalPart.length; i++) {
     const digit = decimalPart[i];
     const digitValue = Math.pow(10, 2 - i - 1) * 10; // Power for 10Hz steps
-    html += `<span class="digit" data-value="${digitValue}" data-digit="${digit}">${digit}</span>`;
+    html += `<span class="digit clickable-digit" data-value="${digitValue}" data-digit="${digit}">${digit}</span>`;
   }
 
   frequencyA.innerHTML = html;
 
-  // Add click handlers to digits
-  const digitElements = frequencyA.querySelectorAll('.digit[data-value]');
-  digitElements.forEach(digitEl => {
-    digitEl.addEventListener('click', handleDigitClick);
-  });
+  // Add click AND touch handlers to digits - use event delegation to avoid losing listeners
+  frequencyA.removeEventListener('click', handleFrequencyClick);
+  frequencyA.removeEventListener('touchstart', handleFrequencyTouch);
+  frequencyA.addEventListener('click', handleFrequencyClick);
+  frequencyA.addEventListener('touchstart', handleFrequencyTouch);
 }
 
-function handleDigitClick(event) {
+// Use event delegation to handle clicks on the frequency display
+function handleFrequencyClick(event) {
   const digitEl = event.target;
+  if (!digitEl.classList.contains('clickable-digit')) return;
+
+  processDigitInteraction(digitEl, event);
+}
+
+// Handle touch events for mobile
+function handleFrequencyTouch(event) {
+  event.preventDefault(); // Prevent double-firing with click
+  const digitEl = event.target;
+  if (!digitEl.classList.contains('clickable-digit')) return;
+
+  processDigitInteraction(digitEl, event.touches[0] || event);
+}
+
+function processDigitInteraction(digitEl, eventData) {
   const digitValue = parseInt(digitEl.getAttribute('data-value'));
   const currentDigit = parseInt(digitEl.getAttribute('data-digit'));
 
+  console.log(`Clicked digit: ${currentDigit}, value: ${digitValue}Hz`); // Debug
+
   // Determine if click was on upper or lower half
   const rect = digitEl.getBoundingClientRect();
-  const clickY = event.clientY - rect.top;
+  const clickY = eventData.clientY - rect.top;
   const isUpperHalf = clickY < (rect.height / 2);
+
+  console.log(`Click Y: ${clickY}, Height: ${rect.height}, Upper half: ${isUpperHalf}`); // Debug
 
   let newFrequency = currentFrequencyHz;
 
@@ -161,6 +181,8 @@ function handleDigitClick(event) {
       newFrequency += 9 * digitValue;
     }
   }
+
+  console.log(`Old frequency: ${currentFrequencyHz}Hz, New frequency: ${newFrequency}Hz`); // Debug
 
   // Bounds checking
   if (newFrequency < 1000000) newFrequency = 1000000; // 1 MHz minimum
@@ -252,7 +274,6 @@ socket.on('tune_response', function(data) {
     console.error('Tune command failed:', data.error);
     // Reset tune button on error
     tuneActive = false;
-    tuneBtn.textContent = 'Tune';
     tuneBtn.className = 'btn btn-outline-info me-3';
   }
 });
