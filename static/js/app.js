@@ -188,11 +188,17 @@ tuneBtn.addEventListener('click', function() {
   tuneActive = !tuneActive;
 
   if (tuneActive) {
-    tuneBtn.textContent = 'TUNING...';
     tuneBtn.className = 'btn btn-warning me-3';
     socket.emit('tune_control', { action: 'start' });
+
+    // Auto-reset after 10 seconds since we can't reliably detect when tuning is complete
+    setTimeout(() => {
+      if (tuneActive) {
+        tuneActive = false;
+        tuneBtn.className = 'btn btn-outline-info me-3';
+      }
+    }, 10000);
   } else {
-    tuneBtn.textContent = 'Tune';
     tuneBtn.className = 'btn btn-outline-info me-3';
     socket.emit('tune_control', { action: 'stop' });
   }
@@ -207,14 +213,16 @@ function togglePTT() {
   pttActive = !pttActive;
 
   if (pttActive) {
-    pttBtn.textContent = 'TRANSMITTING';
+    // TX mode - red background
     pttBtn.className = 'btn btn-danger';
     pttBtn.style.backgroundColor = '#dc3545';
+    pttBtn.style.color = 'white';
     socket.emit('ptt_control', { action: 'on' });
   } else {
-    pttBtn.textContent = 'PTT';
-    pttBtn.className = 'btn btn-outline-danger';
-    pttBtn.style.backgroundColor = '';
+    // RX mode - green background
+    pttBtn.className = 'btn btn-success';
+    pttBtn.style.backgroundColor = '#28a745';
+    pttBtn.style.color = 'white';
     socket.emit('ptt_control', { action: 'off' });
   }
 }
@@ -222,9 +230,10 @@ function togglePTT() {
 function deactivatePTT() {
   if (pttActive) {
     pttActive = false;
-    pttBtn.textContent = 'PTT';
-    pttBtn.className = 'btn btn-outline-danger';
-    pttBtn.style.backgroundColor = '';
+    // RX mode - green background
+    pttBtn.className = 'btn btn-success';
+    pttBtn.style.backgroundColor = '#28a745';
+    pttBtn.style.color = 'white';
     socket.emit('ptt_control', { action: 'off' });
   }
 }
