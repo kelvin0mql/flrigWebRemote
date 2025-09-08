@@ -7,49 +7,51 @@ body {
     background: linear-gradient(135deg, #e8f4f0 0%, #d1eddf 100%);
     border: 2px solid #28a745;
     border-radius: 10px;
-    padding: 20px;
+    padding: 30px;
     margin: 20px auto;
-    max-width: 600px;
+    max-width: 900px;
 }
 
 .clickable-frequency {
-    font-size: 5rem;
+    font-size: 8rem;
     font-weight: bold;
     color: #000;
     font-family: 'Courier New', monospace;
-    letter-spacing: 4px;
+    letter-spacing: 8px;
     cursor: pointer;
     user-select: none;
     position: relative;
-    padding: 10px 0;
+    padding: 20px 0;
+    line-height: 1.1;
 }
 
 .clickable-frequency .digit {
     display: inline-block;
     position: relative;
-    padding: 0 2px;
-    border-radius: 4px;
-    transition: background-color 0.1s ease;
+    padding: 15px 8px;
+    margin: 0 2px;
+    border-radius: 8px;
+    transition: all 0.1s ease;
+    min-width: 60px;
+    text-align: center;
+    border: 2px solid transparent;
 }
 
 .clickable-frequency .digit:hover {
-    background-color: rgba(40, 167, 69, 0.2);
+    background-color: rgba(40, 167, 69, 0.3);
+    border-color: rgba(40, 167, 69, 0.5);
 }
 
 .clickable-frequency .digit.active {
-    background-color: rgba(40, 167, 69, 0.4);
+    background-color: rgba(40, 167, 69, 0.6);
+    border-color: #28a745;
+    transform: scale(1.05);
 }
 
-.vfo-b-display {
-    font-size: 1.8rem;
-    font-weight: bold;
-    color: #6c757d;
-    font-family: 'Courier New', monospace;
-    background-color: #e9ecef;
-    border-radius: 5px;
-    padding: 10px;
-    display: inline-block;
-    min-width: 200px;
+/* Decimal point styling */
+.clickable-frequency .digit:not([data-value]) {
+    padding: 15px 4px;
+    min-width: 20px;
 }
 
 .control-group {
@@ -108,24 +110,48 @@ body {
 
 /* Touch-friendly frequency controls */
 .frequency-controls, .frequency-controls-2 {
-    margin: 15px 0;
+    margin: 20px 0;
 }
 
 .frequency-controls button, .frequency-controls-2 button {
-    min-height: 44px;
-    font-size: 1rem;
+    min-height: 55px;
+    font-size: 1.3rem;
     font-weight: bold;
+    margin: 5px;
+    padding: 15px 25px;
 }
 
-/* Mobile responsiveness */
+/* PTT button special styling */
+.frequency-controls-2 .btn-outline-danger {
+    background-color: #dc3545;
+    color: white;
+    border-color: #dc3545;
+    font-size: 1.5rem;
+    font-weight: bold;
+    text-transform: uppercase;
+}
+
+.frequency-controls-2 .btn-outline-danger:hover {
+    background-color: #c82333;
+    border-color: #bd2130;
+}
+
+/* Mobile responsiveness - still huge! */
 @media (max-width: 768px) {
     .clickable-frequency {
-        font-size: 3.5rem;
-        letter-spacing: 2px;
+        font-size: 5rem;
+        letter-spacing: 4px;
     }
 
-    .vfo-b-display {
-        font-size: 1.4rem;
+    .clickable-frequency .digit {
+        padding: 12px 6px;
+        min-width: 45px;
+    }
+
+    .frequency-controls button, .frequency-controls-2 button {
+        font-size: 1.1rem;
+        min-height: 50px;
+        padding: 12px 20px;
     }
 
     .container-fluid {
@@ -133,24 +159,39 @@ body {
     }
 }
 
-/* iPad specific optimizations */
+/* iPad specific optimizations - HUGE */
 @media (min-width: 768px) and (max-width: 1024px) {
     .clickable-frequency {
-        font-size: 6rem;
-        letter-spacing: 6px;
+        font-size: 10rem;
+        letter-spacing: 12px;
+    }
+
+    .clickable-frequency .digit {
+        padding: 20px 10px;
+        min-width: 80px;
     }
 
     .frequency-controls button, .frequency-controls-2 button {
-        font-size: 1.2rem;
-        padding: 12px 24px;
-        min-height: 50px;
+        font-size: 1.4rem;
+        padding: 18px 30px;
+        min-height: 60px;
     }
 }
 
-/* Large screens */
+/* Large screens - MASSIVE */
 @media (min-width: 1025px) {
     .clickable-frequency {
-        font-size: 7rem;
-        letter-spacing: 8px;
+        font-size: 12rem;
+        letter-spacing: 15px;
     }
+
+    .clickable-frequency .digit {
+        padding: 25px 15px;
+        min-width: 100px;
+    }
+}
+
+/* Hide VFO B display for simplified interface */
+.vfo-b-display {
+    display: none;
 }
