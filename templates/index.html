@@ -22,24 +22,31 @@
             <!-- Main Frequency Display -->
             <div class="frequency-display text-center mb-4">
                 <div class="clickable-frequency" id="frequency-a">0000.000</div>
-                <div class="frequency-controls mt-2">
+
+                <!-- Simplified Controls - Only Tune and PTT -->
+                <div class="frequency-controls mt-3">
+                    <!-- Commented out for SSB operation - uncomment if needed
                     <button class="btn btn-outline-primary me-2" disabled>VfA</button>
                     <button class="btn btn-outline-secondary" disabled>VfB</button>
-                    <button class="btn btn-outline-info ms-3" disabled>Tune</button>
+                    -->
+                    <button class="btn btn-outline-info me-3" id="tune-btn">Tune</button>
+                    <button class="btn btn-outline-danger" id="ptt-btn">PTT</button>
                 </div>
 
-                <!-- Missing Second Row -->
+                <!-- Commented out VFO switching controls - uncomment if needed
                 <div class="frequency-controls-2 mt-2">
                     <button class="btn btn-outline-success me-2" disabled>A/B</button>
                     <button class="btn btn-outline-warning me-2" disabled>Split</button>
-                    <button class="btn btn-outline-danger" disabled>PTT</button>
                 </div>
+                -->
             </div>
 
-            <!-- VFO B Display -->
+            <!-- VFO B Display - Hidden for SSB operation -->
+            <!--
             <div class="text-center mb-3">
                 <div class="vfo-b-display" id="frequency-b">0000.000</div>
             </div>
+            -->
 
             <!-- Mode and Controls Row -->
             <div class="row mb-3">

@@ -1,5 +1,5 @@
 from flask import Flask, render_template, jsonify
-from flask_socketio import SocketIO
+from flask_socketio import SocketIO, emit
 import xmlrpc.client
 import threading
 import time
@@ -10,7 +10,7 @@ app.config['SECRET_KEY'] = 'flrig-web-remote-secret'
 socketio = SocketIO(app, cors_allowed_origins="*")
 
 # flrig connection settings
-FLRIG_HOST = "192.168.1.29"  # Your flrig host
+FLRIG_HOST = "localhost"  # Changed to localhost since running on same machine
 FLRIG_PORT = 12345           # Default flrig XML-RPC port
 server_url = f"http://{FLRIG_HOST}:{FLRIG_PORT}/RPC2"
 
@@ -108,6 +108,50 @@ class FlrigWebRemote:
             self.current_data['connected'] = False
             self.initialize_connection()
 
+    def set_frequency(self, frequency_hz):
+        """Set radio frequency."""
+        if not self.client:
+            return False, "Not connected to flrig"
+
+        try:
+            self.client.rig.set_vfoA(int(frequency_hz))
+            return True, "Frequency set successfully"
+        except Exception as e:
+            print(f"Error setting frequency: {e}")
+            return False, str(e)
+
+    def tune_control(self, action):
+        """Control tuner."""
+        if not self.client:
+            return False, "Not connected to flrig"
+
+        try:
+            if action == 'start':
+                # Start tuning - this might vary by radio model
+                self.client.rig.tune(1)  # or self.client.rig.set_tune(1)
+            else:
+                # Stop tuning
+                self.client.rig.tune(0)  # or self.client.rig.set_tune(0)
+            return True, f"Tune {action} successful"
+        except Exception as e:
+            print(f"Error controlling tuner: {e}")
+            return False, str(e)
+
+    def ptt_control(self, action):
+        """Control PTT."""
+        if not self.client:
+            return False, "Not connected to flrig"
+
+        try:
+            if action == 'on':
+                self.client.rig.set_ptt(1)
+            else:
+                self.client.rig.set_ptt(0)
+            return True, f"PTT {action} successful"
+        except Exception as e:
+            print(f"Error controlling PTT: {e}")
+            return False, str(e)
+
 # Global instance
 flrig_remote = FlrigWebRemote()
 
@@ -131,12 +175,29 @@ def background_updater():
 @socketio.on('connect')
 def handle_connect():
     print('Client connected')
-    # Send current data immediately when client connects
-    socketio.emit('status_update', flrig_remote.current_data)
+    emit('status_update', flrig_remote.current_data)
 
 @socketio.on('disconnect')
 def handle_disconnect():
     print('Client disconnected')
+
+@socketio.on('frequency_change')
+def handle_frequency_change(data):
+    """Handle frequency change requests."""
+    success, message = flrig_remote.set_frequency(data['frequency'])
+    emit('frequency_changed', {'success': success, 'error': message if not success else None})
+
+@socketio.on('tune_control')
+def handle_tune_control(data):
+    """Handle tuner control requests."""
+    success, message = flrig_remote.tune_control(data['action'])
+    emit('tune_response', {'success': success, 'error': message if not success else None})
+
+@socketio.on('ptt_control')
+def handle_ptt_control(data):
+    """Handle PTT control requests."""
+    success, message = flrig_remote.ptt_control(data['action'])
+    emit('ptt_response', {'success': success, 'error': message if not success else None})
 
 if __name__ == '__main__':
     # Start background updater thread

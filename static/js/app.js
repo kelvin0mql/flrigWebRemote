@@ -5,7 +5,6 @@ const socket = io();
 const connectionStatus = document.getElementById('connection-status');
 const lastUpdate = document.getElementById('last-update');
 const frequencyA = document.getElementById('frequency-a');
-const frequencyB = document.getElementById('frequency-b');
 const currentMode = document.getElementById('current-mode');
 const currentBandwidth = document.getElementById('current-bandwidth');
 const micValue = document.getElementById('mic-value');
@@ -18,8 +17,14 @@ const powerSlider = document.getElementById('power-slider');
 const rfSlider = document.getElementById('rf-slider');
 const volumeSlider = document.getElementById('volume-slider');
 
+// Control buttons
+const tuneBtn = document.getElementById('tune-btn');
+const pttBtn = document.getElementById('ptt-btn');
+
 // Current frequency for digit manipulation
 let currentFrequencyHz = 0;
+let pttActive = false;
+let tuneActive = false;
 
 // Handle status updates from server
 socket.on('status_update', function(data) {
@@ -52,7 +57,6 @@ function updateDisplay(data) {
 
   // Update frequency displays with clickable digits
   updateClickableFrequency(data.frequency_a);
-  frequencyB.textContent = data.frequency_b;
 
   // Update mode and bandwidth
   currentMode.textContent = data.mode;
@@ -166,19 +170,90 @@ function handleDigitClick(event) {
 }
 
 function sendFrequencyChange(frequencyHz) {
-  // Send via WebSocket to server
   socket.emit('frequency_change', {
     frequency: frequencyHz,
     vfo: 'A'
   });
 }
 
-// Handle frequency change responses
+// Tune button handler
+tuneBtn.addEventListener('click', function() {
+  tuneActive = !tuneActive;
+
+  if (tuneActive) {
+    tuneBtn.textContent = 'TUNING...';
+    tuneBtn.className = 'btn btn-warning me-3';
+    socket.emit('tune_control', { action: 'start' });
+  } else {
+    tuneBtn.textContent = 'Tune';
+    tuneBtn.className = 'btn btn-outline-info me-3';
+    socket.emit('tune_control', { action: 'stop' });
+  }
+});
+
+// PTT button handlers
+pttBtn.addEventListener('mousedown', function() {
+  activatePTT();
+});
+
+pttBtn.addEventListener('mouseup', function() {
+  deactivatePTT();
+});
+
+pttBtn.addEventListener('touchstart', function(e) {
+  e.preventDefault();
+  activatePTT();
+});
+
+pttBtn.addEventListener('touchend', function(e) {
+  e.preventDefault();
+  deactivatePTT();
+});
+
+function activatePTT() {
+  if (!pttActive) {
+    pttActive = true;
+    pttBtn.textContent = 'TRANSMITTING';
+    pttBtn.className = 'btn btn-danger';
+    pttBtn.style.backgroundColor = '#dc3545';
+    socket.emit('ptt_control', { action: 'on' });
+  }
+}
+
+function deactivatePTT() {
+  if (pttActive) {
+    pttActive = false;
+    pttBtn.textContent = 'PTT';
+    pttBtn.className = 'btn btn-outline-danger';
+    pttBtn.style.backgroundColor = '';
+    socket.emit('ptt_control', { action: 'off' });
+  }
+}
+
+// Handle server responses
 socket.on('frequency_changed', function(data) {
   if (data.success) {
     console.log('Frequency changed successfully');
   } else {
     console.error('Failed to change frequency:', data.error);
+  }
+});
+
+socket.on('tune_response', function(data) {
+  if (!data.success) {
+    console.error('Tune command failed:', data.error);
+    // Reset tune button on error
+    tuneActive = false;
+    tuneBtn.textContent = 'Tune';
+    tuneBtn.className = 'btn btn-outline-info me-3';
+  }
+});
+
+socket.on('ptt_response', function(data) {
+  if (!data.success) {
+    console.error('PTT command failed:', data.error);
+    // Reset PTT button on error
+    deactivatePTT();
   }
 });
 
