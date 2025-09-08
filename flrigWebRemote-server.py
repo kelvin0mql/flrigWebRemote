@@ -51,7 +51,7 @@ class FlrigWebRemote:
             self.initialize_connection()
             return
 
-                try:
+        try:
             # Get frequency data - change to show kHz format like flrig
             freq_a_hz = float(self.client.rig.get_vfoA())
             self.current_data['frequency_a'] = f"{freq_a_hz / 1e3:.2f}"  # Changed to kHz with 2 decimals
