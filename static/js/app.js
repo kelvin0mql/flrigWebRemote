@@ -88,15 +88,15 @@ function updateDisplay(data) {
   }
 }
 
-function updateClickableFrequency(freqMHz) {
-  // Store current frequency for manipulation
-  currentFrequencyHz = parseFloat(freqMHz) * 1e6;
+function updateClickableFrequency(freqKHz) {
+  // Store current frequency for manipulation - convert kHz back to Hz
+  currentFrequencyHz = parseFloat(freqKHz) * 1e3;
 
-  // Format frequency with individual clickable digits
-  const freqStr = parseFloat(freqMHz).toFixed(3);
+  // Format frequency as kHz.XX (like flrig: 7200.00)
+  const freqStr = parseFloat(freqKHz).toFixed(2);
   const parts = freqStr.split('.');
-  let integerPart = parts[0];
-  const decimalPart = parts[1];
+  let integerPart = parts[0]; // This is now the kHz part
+  const decimalPart = parts[1]; // This is now hundredths of kHz (10Hz steps)
 
   // Remove leading zeros but keep at least one digit
   integerPart = integerPart.replace(/^0+/, '') || '0';
@@ -106,20 +106,20 @@ function updateClickableFrequency(freqMHz) {
   // Calculate the digit powers based on the actual number of digits shown
   const numDigits = integerPart.length;
 
-  // Integer part (MHz) - no leading zeros
+  // Integer part (kHz) - no leading zeros
   for (let i = 0; i < integerPart.length; i++) {
     const digit = integerPart[i];
     const digitPower = numDigits - 1 - i; // Position from right (0-based)
-    const digitValue = Math.pow(10, digitPower + 6); // +6 for MHz to Hz conversion
+    const digitValue = Math.pow(10, digitPower + 3); // +3 for kHz to Hz conversion
     html += `<span class="digit" data-value="${digitValue}" data-digit="${digit}">${digit}</span>`;
   }
 
   html += '<span class="digit">.</span>'; // Decimal point
 
-  // Decimal part (kHz)
+  // Decimal part (hundredths of kHz = 10Hz steps)
   for (let i = 0; i < decimalPart.length; i++) {
     const digit = decimalPart[i];
-    const digitValue = Math.pow(10, 3 - i - 1) * 1000; // Power for kHz
+    const digitValue = Math.pow(10, 2 - i - 1) * 10; // Power for 10Hz steps
     html += `<span class="digit" data-value="${digitValue}" data-digit="${digit}">${digit}</span>`;
   }
 

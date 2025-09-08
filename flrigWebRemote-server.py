@@ -51,14 +51,14 @@ class FlrigWebRemote:
             self.initialize_connection()
             return
 
-        try:
-            # Get frequency data
+                try:
+            # Get frequency data - change to show kHz format like flrig
             freq_a_hz = float(self.client.rig.get_vfoA())
-            self.current_data['frequency_a'] = f"{freq_a_hz / 1e6:.3f}"
+            self.current_data['frequency_a'] = f"{freq_a_hz / 1e3:.2f}"  # Changed to kHz with 2 decimals
 
             try:
                 freq_b_hz = float(self.client.rig.get_vfoB())
-                self.current_data['frequency_b'] = f"{freq_b_hz / 1e6:.3f}"
+                self.current_data['frequency_b'] = f"{freq_b_hz / 1e3:.2f}"  # Changed to kHz with 2 decimals
             except:
                 self.current_data['frequency_b'] = "N/A"
 
