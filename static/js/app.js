@@ -95,15 +95,22 @@ function updateClickableFrequency(freqMHz) {
   // Format frequency with individual clickable digits
   const freqStr = parseFloat(freqMHz).toFixed(3);
   const parts = freqStr.split('.');
-  const integerPart = parts[0].padStart(4, '0'); // Ensure 4 digits
+  let integerPart = parts[0];
   const decimalPart = parts[1];
+
+  // Remove leading zeros but keep at least one digit
+  integerPart = integerPart.replace(/^0+/, '') || '0';
 
   let html = '';
 
-  // Integer part (MHz)
+  // Calculate the digit powers based on the actual number of digits shown
+  const numDigits = integerPart.length;
+
+  // Integer part (MHz) - no leading zeros
   for (let i = 0; i < integerPart.length; i++) {
     const digit = integerPart[i];
-    const digitValue = Math.pow(10, 6 + (3 - i)); // Power for MHz
+    const digitPower = numDigits - 1 - i; // Position from right (0-based)
+    const digitValue = Math.pow(10, digitPower + 6); // +6 for MHz to Hz conversion
     html += `<span class="digit" data-value="${digitValue}" data-digit="${digit}">${digit}</span>`;
   }
 
