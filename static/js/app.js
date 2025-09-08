@@ -26,6 +26,9 @@ let currentFrequencyHz = 0;
 let pttActive = false;
 let tuneActive = false;
 
+// Global event listener setup - only do this once
+let frequencyListenerSetup = false;
+
 // Handle status updates from server
 socket.on('status_update', function(data) {
   updateDisplay(data);
@@ -125,31 +128,33 @@ function updateClickableFrequency(freqKHz) {
 
   frequencyA.innerHTML = html;
 
-  // Add click AND touch handlers to digits - use event delegation to avoid losing listeners
-  frequencyA.removeEventListener('click', handleFrequencyClick);
-  frequencyA.removeEventListener('touchstart', handleFrequencyTouch);
-  frequencyA.addEventListener('click', handleFrequencyClick);
-  frequencyA.addEventListener('touchstart', handleFrequencyTouch);
+  // Set up event listeners only once using event delegation
+  if (!frequencyListenerSetup) {
+    console.log('Setting up frequency event listeners'); // Debug
+
+    // Use event delegation on the parent container
+    frequencyA.addEventListener('click', function(event) {
+      console.log('Frequency click detected'); // Debug
+      handleDigitInteraction(event.target, event);
+    });
+
+    frequencyA.addEventListener('touchend', function(event) {
+      console.log('Frequency touch detected'); // Debug
+      event.preventDefault();
+      handleDigitInteraction(event.target, event.changedTouches[0]);
+    });
+
+    frequencyListenerSetup = true;
+  }
 }
 
-// Use event delegation to handle clicks on the frequency display
-function handleFrequencyClick(event) {
-  const digitEl = event.target;
-  if (!digitEl.classList.contains('clickable-digit')) return;
+function handleDigitInteraction(digitEl, eventData) {
+  // Check if the clicked element is a clickable digit
+  if (!digitEl.classList.contains('clickable-digit')) {
+    console.log('Not a clickable digit:', digitEl); // Debug
+    return;
+  }
 
-  processDigitInteraction(digitEl, event);
-}
-
-// Handle touch events for mobile
-function handleFrequencyTouch(event) {
-  event.preventDefault(); // Prevent double-firing with click
-  const digitEl = event.target;
-  if (!digitEl.classList.contains('clickable-digit')) return;
-
-  processDigitInteraction(digitEl, event.touches[0] || event);
-}
-
-function processDigitInteraction(digitEl, eventData) {
   const digitValue = parseInt(digitEl.getAttribute('data-value'));
   const currentDigit = parseInt(digitEl.getAttribute('data-digit'));
 
