@@ -265,7 +265,7 @@ pttBtn.addEventListener('click', function() {
   togglePTT();
 });
 
-ffunction togglePTT() {
+function togglePTT() {
   pttActive = !pttActive;
 
   if (pttActive) {
@@ -325,3 +325,11 @@ fetch('/api/status')
   .then(response => response.json())
   .then(data => updateDisplay(data))
   .catch(error => console.error('Error fetching initial status:', error));
+
+// Initialize PTT button to RX state (green) after DOM is loaded
+document.addEventListener('DOMContentLoaded', function() {
+  // Initialize PTT button to RX state (green)
+  pttBtn.className = 'btn btn-success';
+  pttBtn.style.backgroundColor = '#28a745';
+  pttBtn.style.color = 'white';
+});
