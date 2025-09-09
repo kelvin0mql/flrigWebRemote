@@ -21,10 +21,17 @@ const volumeSlider = document.getElementById('volume-slider');
 const tuneBtn = document.getElementById('tune-btn');
 const pttBtn = document.getElementById('ptt-btn');
 
+// Live audio elements (may or may not exist depending on the page)
+const rxAudioEl = document.getElementById('rx-audio');
+const audioToggleBtn = document.getElementById('audio-toggle');
+
 // Current frequency for digit manipulation
 let currentFrequencyHz = 0;
 let pttActive = false;
 let tuneActive = false;
+
+// Track if we muted audio because of TX, so we only unmute if we were the ones who muted it
+let audioMutedByPTT = false;
 
 // Global event listener setup - only do this once
 let frequencyListenerSetup = false;
@@ -274,12 +281,26 @@ function togglePTT() {
     pttBtn.style.backgroundColor = '#dc3545';
     pttBtn.style.color = 'white';
     socket.emit('ptt_control', { action: 'on' });
+
+    // Immediately mute live audio to prevent echo/feedback
+    if (rxAudioEl) {
+      if (!rxAudioEl.muted) {
+        rxAudioEl.muted = true;
+        audioMutedByPTT = true;
+      }
+    }
   } else {
     // RX mode - solid green background (consistent look)
     pttBtn.className = 'btn btn-success';
     pttBtn.style.backgroundColor = '#28a745';
     pttBtn.style.color = 'white';
     socket.emit('ptt_control', { action: 'off' });
+
+    // Restore audio only if we muted it for TX
+    if (rxAudioEl && audioMutedByPTT) {
+      rxAudioEl.muted = false;
+      audioMutedByPTT = false;
+    }
   }
 }
 
@@ -291,6 +312,12 @@ function deactivatePTT() {
     pttBtn.style.backgroundColor = '#28a745';
     pttBtn.style.color = 'white';
     socket.emit('ptt_control', { action: 'off' });
+
+    // Restore audio only if we muted it for TX
+    if (rxAudioEl && audioMutedByPTT) {
+      rxAudioEl.muted = false;
+      audioMutedByPTT = false;
+    }
   }
 }
 
