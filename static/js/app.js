@@ -49,8 +49,15 @@ function stopLiveAudioStream() {
 
 function startLiveAudioStream() {
   if (!rxAudioEl) return;
-  // MP3 only, keep source consistent and reconnect at live edge
-  const liveUrl = '/audio.mp3';
+  // Prefer uncompressed WAV (lowest latency) on LAN; fallback to MP3
+  const candidates = [
+    { url: '/audio.wav', type: 'audio/wav'   },
+    { url: '/audio.mp3', type: 'audio/mpeg' }
+  ];
+  let liveUrl = candidates[0].url;
+  for (const c of candidates) {
+    if (rxAudioEl.canPlayType(c.type)) { liveUrl = c.url; break; }
+  }
   rxAudioEl.removeAttribute('src');
   rxAudioEl.load();
   rxAudioEl.src = liveUrl;

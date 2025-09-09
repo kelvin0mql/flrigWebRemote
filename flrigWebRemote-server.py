@@ -433,6 +433,7 @@ def handle_ptt_control(data):
 # ------------- Audio streaming (live, low-latency, MP3 only) -------------
 
 _ffmpeg_proc_mp3 = None
+_ffmpeg_proc_wav = None  # add WAV
 
 def _ffmpeg_common_input_args(alsa_device: str):
     # Low-latency ALSA capture chain
@@ -442,13 +443,47 @@ def _ffmpeg_common_input_args(alsa_device: str):
         "-f", "alsa",
         "-thread_queue_size", "1024",
         "-ac", "1",
-        "-ar", "44100",
+        "-ar", "16000",  # use 16k capture for voice; ALSA will resample if needed
         "-i", alsa_device,
         "-fflags", "nobuffer",
         "-probesize", "32",
         "-analyzeduration", "0",
         "-flush_packets", "1"
     ]
+
+def start_ffmpeg_rx_stream_wav(alsa_device: str):
+    """Uncompressed WAV stream for minimal latency and max iOS compatibility."""
+    global _ffmpeg_proc_wav
+    if _ffmpeg_proc_wav and _ffmpeg_proc_wav.poll() is None:
+        return _ffmpeg_proc_wav
+    if not alsa_device:
+        print("No ALSA input device configured; WAV stream unavailable.")
+        return None
+    cmd = [
+        "ffmpeg",
+        *_ffmpeg_common_input_args(alsa_device),
+        # Voice band
+        "-af", "highpass=f=300,lowpass=f=3000",
+        # Explicit output format: mono, 16kHz, 16-bit PCM
+        "-ac", "1",
+        "-ar", "16000",
+        "-c:a", "pcm_s16le",
+        "-f", "wav",
+        "-"
+    ]
+    try:
+        _ffmpeg_proc_wav = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            bufsize=0
+        )
+        print(f"Started ffmpeg WAV stream from {alsa_device}")
+        return _ffmpeg_proc_wav
+    except Exception as e:
+        print(f"Failed to start WAV stream: {e}")
+        _ffmpeg_proc_wav = None
+        return None
 
 def start_ffmpeg_rx_stream_mp3(alsa_device: str):
     global _ffmpeg_proc_mp3
@@ -496,6 +531,17 @@ def _stream_proc_stdout(proc):
         if not chunk:
             break
         yield chunk
+
+@app.route('/audio.wav')
+def audio_wav():
+    alsa_in = AUDIO_CONFIG.get("audio_in", {}).get("alsa_device")
+    proc = start_ffmpeg_rx_stream_wav(alsa_in)
+    if not proc:
+        return Response("Audio not available\n", status=503, mimetype="text/plain")
+    resp = Response(stream_with_context(_stream_proc_stdout(proc)), mimetype="audio/wav")
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
+    return resp
 
 @app.route('/audio')
 def audio_alias_to_mp3():
