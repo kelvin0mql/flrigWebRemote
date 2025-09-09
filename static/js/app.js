@@ -265,17 +265,17 @@ pttBtn.addEventListener('click', function() {
   togglePTT();
 });
 
-function togglePTT() {
+ffunction togglePTT() {
   pttActive = !pttActive;
 
   if (pttActive) {
-    // TX mode - red background
+    // TX mode - solid red background
     pttBtn.className = 'btn btn-danger';
     pttBtn.style.backgroundColor = '#dc3545';
     pttBtn.style.color = 'white';
     socket.emit('ptt_control', { action: 'on' });
   } else {
-    // RX mode - green background
+    // RX mode - solid green background (consistent look)
     pttBtn.className = 'btn btn-success';
     pttBtn.style.backgroundColor = '#28a745';
     pttBtn.style.color = 'white';
@@ -286,7 +286,7 @@ function togglePTT() {
 function deactivatePTT() {
   if (pttActive) {
     pttActive = false;
-    // RX mode - green background
+    // RX mode - solid green background (consistent look)
     pttBtn.className = 'btn btn-success';
     pttBtn.style.backgroundColor = '#28a745';
     pttBtn.style.color = 'white';
