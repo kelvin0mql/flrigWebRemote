@@ -451,8 +451,25 @@ def _ffmpeg_common_input_args(alsa_device: str):
         "-flush_packets", "1"
     ]
 
+def _ffmpeg_common_input_args(alsa_device: str):
+    # Low-latency ALSA capture chain with wallclock pacing
+    return [
+        "-hide_banner",
+        "-loglevel", "warning",
+        "-f", "alsa",
+        "-thread_queue_size", "1024",
+        "-ac", "1",
+        "-ar", "16000",
+        "-i", alsa_device,
+        "-use_wallclock_as_timestamps", "1",
+        "-fflags", "+genpts",
+        "-fflags", "nobuffer",
+        "-probesize", "32",
+        "-analyzeduration", "0",
+        "-flush_packets", "1"
+    ]
+
 def start_ffmpeg_rx_stream_wav(alsa_device: str):
-    """Uncompressed WAV stream for minimal latency and max iOS compatibility."""
     global _ffmpeg_proc_wav
     if _ffmpeg_proc_wav and _ffmpeg_proc_wav.poll() is None:
         return _ffmpeg_proc_wav
@@ -462,21 +479,18 @@ def start_ffmpeg_rx_stream_wav(alsa_device: str):
     cmd = [
         "ffmpeg",
         *_ffmpeg_common_input_args(alsa_device),
-        # Voice band
         "-af", "highpass=f=300,lowpass=f=3000",
-        # Explicit output format: mono, 16kHz, 16-bit PCM
         "-ac", "1",
         "-ar", "16000",
         "-c:a", "pcm_s16le",
+        "-muxpreload", "0",
+        "-muxdelay", "0",
         "-f", "wav",
         "-"
     ]
     try:
         _ffmpeg_proc_wav = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            bufsize=0
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0
         )
         print(f"Started ffmpeg WAV stream from {alsa_device}")
         return _ffmpeg_proc_wav
@@ -495,26 +509,21 @@ def start_ffmpeg_rx_stream_mp3(alsa_device: str):
     cmd = [
         "ffmpeg",
         *_ffmpeg_common_input_args(alsa_device),
-        # Voice-tailored passband and sample rate
         "-af", "highpass=f=300,lowpass=f=3000",
-        # Force mono + 22050 Hz on output (good Safari compatibility, smaller buffers)
         "-ac", "1",
         "-ar", "22050",
-        # CBR, no VBR/Xing header, no bit reservoir (lower startup/decoder delay)
         "-c:a", "libmp3lame",
         "-b:a", "24k",
         "-write_xing", "0",
         "-reservoir", "0",
-        # Stream as raw MP3 frames over HTTP
+        "-muxpreload", "0",
+        "-muxdelay", "0",
         "-f", "mp3",
         "-"
     ]
     try:
         _ffmpeg_proc_mp3 = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            bufsize=0
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0
         )
         print(f"Started ffmpeg MP3 stream from {alsa_device}")
         return _ffmpeg_proc_mp3
