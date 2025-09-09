@@ -25,28 +25,18 @@
 
                 <!-- Simplified Controls - Only Tune and PTT -->
                 <div class="frequency-controls mt-3">
-                    <!-- Commented out for SSB operation - uncomment if needed
-                    <button class="btn btn-outline-primary me-2" disabled>VfA</button>
-                    <button class="btn btn-outline-secondary" disabled>VfB</button>
-                    -->
                     <button class="btn btn-outline-info me-3" id="tune-btn">Tune</button>
                     <button class="btn btn-outline-danger" id="ptt-btn">PTT</button>
                 </div>
+            </div>
 
-                <!-- Commented out VFO switching controls - uncomment if needed
-                <div class="frequency-controls-2 mt-2">
-                    <button class="btn btn-outline-success me-2" disabled>A/B</button>
-                    <button class="btn btn-outline-warning me-2" disabled>Split</button>
+            <!-- SWR Display - Critical safety info right after frequency/PTT -->
+            <div class="text-center mb-4">
+                <div class="control-group" style="max-width: 300px; margin: 0 auto;">
+                    <label class="form-label">SWR</label>
+                    <div class="swr-display" id="swr-value">0.0</div>
                 </div>
-                -->
             </div>
-
-            <!-- VFO B Display - Hidden for SSB operation -->
-            <!--
-            <div class="text-center mb-3">
-                <div class="vfo-b-display" id="frequency-b">0000.000</div>
-            </div>
-            -->
 
             <!-- Mode and Controls Row -->
             <div class="row mb-3">
@@ -86,15 +76,9 @@
                 </div>
             </div>
 
-            <!-- SWR and Volume -->
+            <!-- Volume -->
             <div class="row mb-4">
-                <div class="col-md-6">
-                    <div class="control-group">
-                        <label class="form-label">SWR</label>
-                        <div class="swr-display" id="swr-value">0.0</div>
-                    </div>
-                </div>
-                <div class="col-md-6">
+                <div class="col-md-6 mx-auto">
                     <div class="control-group">
                         <label class="form-label">Vol: <span id="volume-value">0</span></label>
                         <input type="range" class="form-range" id="volume-slider" min="0" max="100" disabled>
