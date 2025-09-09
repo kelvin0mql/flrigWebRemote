@@ -30,55 +30,53 @@
                 </div>
             </div>
 
-            <!-- SWR Display - Critical safety info right after frequency/PTT -->
-            <div class="text-center mb-4">
-                <div class="control-group" style="max-width: 300px; margin: 0 auto;">
-                    <label class="form-label">SWR</label>
-                    <div class="swr-display" id="swr-value">0.0</div>
-                </div>
-            </div>
-
-            <!-- Mode and Controls Row -->
+            <!-- Mode, Bandwidth, and SWR Row -->
             <div class="row mb-3">
-                <div class="col-md-6">
+                <div class="col-md-4">
                     <div class="control-group">
                         <label class="form-label">Mode</label>
                         <div class="mode-display" id="current-mode">Unknown</div>
                     </div>
                 </div>
-                <div class="col-md-6">
+                <div class="col-md-4">
                     <div class="control-group">
                         <label class="form-label">Bandwidth</label>
                         <div class="bandwidth-display" id="current-bandwidth">Unknown</div>
                     </div>
                 </div>
+                <div class="col-md-4">
+                    <div class="control-group">
+                        <label class="form-label">SWR</label>
+                        <div class="swr-display" id="swr-value">0.0</div>
+                    </div>
+                </div>
             </div>
 
-            <!-- Control Sliders -->
+            <!-- Control Sliders Row 1: Mic and Power -->
             <div class="row mb-4">
-                <div class="col-md-4">
+                <div class="col-md-6">
                     <div class="control-group">
                         <label class="form-label">Mic: <span id="mic-value">0</span></label>
                         <input type="range" class="form-range" id="mic-slider" min="0" max="100" disabled>
                     </div>
                 </div>
-                <div class="col-md-4">
+                <div class="col-md-6">
                     <div class="control-group">
                         <label class="form-label">Pwr: <span id="power-value">0</span></label>
                         <input type="range" class="form-range" id="power-slider" min="0" max="100" disabled>
                     </div>
                 </div>
-                <div class="col-md-4">
+            </div>
+
+            <!-- Control Sliders Row 2: RF and Volume -->
+            <div class="row mb-4">
+                <div class="col-md-6">
                     <div class="control-group">
                         <label class="form-label">RF: <span id="rf-value">0</span></label>
                         <input type="range" class="form-range" id="rf-slider" min="0" max="100" disabled>
                     </div>
                 </div>
-            </div>
-
-            <!-- Volume -->
-            <div class="row mb-4">
-                <div class="col-md-6 mx-auto">
+                <div class="col-md-6">
                     <div class="control-group">
                         <label class="form-label">Vol: <span id="volume-value">0</span></label>
                         <input type="range" class="form-range" id="volume-slider" min="0" max="100" disabled>
