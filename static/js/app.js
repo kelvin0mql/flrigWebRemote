@@ -75,16 +75,59 @@ function stopLiveAudioStream() {
   updateListenButtons();
 }
 
+function attachAudioDebug() {
+  if (!rxAudioEl || rxAudioEl._dbgAttached) return;
+  rxAudioEl._dbgAttached = true;
+  rxAudioEl.addEventListener('playing', () => console.log('[audio] playing, readyState=', rxAudioEl.readyState));
+  rxAudioEl.addEventListener('waiting', () => console.log('[audio] waiting, readyState=', rxAudioEl.readyState));
+  rxAudioEl.addEventListener('stalled', () => console.warn('[audio] stalled, networkState=', rxAudioEl.networkState));
+  rxAudioEl.addEventListener('error', () => console.error('[audio] error', rxAudioEl.error));
+  rxAudioEl.addEventListener('ended', () => console.log('[audio] ended'));
+}
+
 function startLiveAudioStream(kind) {
   if (!rxAudioEl) return;
+  attachAudioDebug();
+
   const liveUrl = (kind === 'wav') ? '/audio.wav' : '/audio.mp3';
   rxAudioEl.removeAttribute('src');
   rxAudioEl.load();
+
   rxAudioEl.src = liveUrl;
   rxAudioEl.muted = false;
   currentStreamKind = kind;
-  try { rxAudioEl.play().catch(() => {}); } catch (_) {}
-  updateListenButtons();
+
+  let triedOnce = false;
+
+  const tryPlay = () => {
+    console.log(`[audio] start ${kind} -> ${liveUrl}`);
+    const p = rxAudioEl.play();
+    if (p && typeof p.then === 'function') {
+      p.then(() => {
+        console.log('[audio] play() resolved');
+        updateListenButtons();
+      }).catch((e) => {
+        console.warn('[audio] play() rejected:', e);
+        if (!triedOnce) {
+          triedOnce = true;
+          // Force re-load and retry once after a short tick
+          rxAudioEl.load();
+          setTimeout(() => {
+            console.log('[audio] retrying play()');
+            tryPlay();
+          }, 200);
+        } else {
+          // Give up gracefully
+          currentStreamKind = null;
+          updateListenButtons();
+        }
+      });
+    } else {
+      updateListenButtons();
+    }
+  };
+
+  tryPlay();
 }
 
 // Wire up the two listen buttons
