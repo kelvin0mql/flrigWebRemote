@@ -30,8 +30,42 @@ let currentFrequencyHz = 0;
 let pttActive = false;
 let tuneActive = false;
 
-// Track if we muted audio because of TX, so we only unmute if we were the ones who muted it
+// Track audio state related to PTT
 let audioMutedByPTT = false;
+let audioPrevVolume = 1.0;
+let audioWasListeningBeforePTT = false;
+
+// Helpers to control the live stream from here (independent of the UI button text)
+function isListening() {
+  return rxAudioEl && rxAudioEl.getAttribute('src') && !rxAudioEl.paused;
+}
+
+function stopLiveAudioStream() {
+  if (!rxAudioEl) return;
+  try { rxAudioEl.pause(); } catch (_) {}
+  rxAudioEl.removeAttribute('src');
+  rxAudioEl.load(); // closes HTTP stream and clears buffer
+}
+
+function startLiveAudioStream() {
+  if (!rxAudioEl) return;
+  // Prefer iOS-friendly AAC stream; fallback to MP3/OGG if needed
+  const candidates = [
+    { url: '/audio.aac', type: 'audio/aac' },
+    { url: '/audio.mp3', type: 'audio/mpeg' },
+    { url: '/audio',     type: 'audio/ogg'  }
+  ];
+  let chosen = candidates[0].url;
+  for (const c of candidates) {
+    if (rxAudioEl.canPlayType(c.type)) { chosen = c.url; break; }
+  }
+  // Force a fresh live edge connection
+  rxAudioEl.removeAttribute('src');
+  rxAudioEl.load();
+  rxAudioEl.src = chosen;
+  rxAudioEl.muted = false;
+  try { rxAudioEl.play(); } catch (_) {}
+}
 
 // Global event listener setup - only do this once
 let frequencyListenerSetup = false;
@@ -273,6 +307,9 @@ pttBtn.addEventListener('click', function() {
 });
 
 function togglePTT() {
+  // Capture listening state BEFORE toggling
+  audioWasListeningBeforePTT = isListening();
+
   pttActive = !pttActive;
 
   if (pttActive) {
@@ -282,24 +319,37 @@ function togglePTT() {
     pttBtn.style.color = 'white';
     socket.emit('ptt_control', { action: 'on' });
 
-    // Immediately mute live audio to prevent echo/feedback
+    // Immediately silence (mute + volume 0) and stop the stream to prevent echo
     if (rxAudioEl) {
       if (!rxAudioEl.muted) {
+        audioPrevVolume = rxAudioEl.volume;
         rxAudioEl.muted = true;
+        rxAudioEl.volume = 0;
         audioMutedByPTT = true;
+      }
+      // Hard stop the stream to avoid any residual audio and save bandwidth
+      if (isListening()) {
+        stopLiveAudioStream();
       }
     }
   } else {
-    // RX mode - solid green background (consistent look)
+    // RX mode - solid green background
     pttBtn.className = 'btn btn-success';
     pttBtn.style.backgroundColor = '#28a745';
     pttBtn.style.color = 'white';
     socket.emit('ptt_control', { action: 'off' });
 
-    // Restore audio only if we muted it for TX
-    if (rxAudioEl && audioMutedByPTT) {
-      rxAudioEl.muted = false;
-      audioMutedByPTT = false;
+    // Restore only what we changed for TX
+    if (rxAudioEl) {
+      if (audioMutedByPTT) {
+        rxAudioEl.muted = false;
+        rxAudioEl.volume = audioPrevVolume || 1.0;
+        audioMutedByPTT = false;
+      }
+      // If you were listening before TX, bring the stream back at the live edge
+      if (audioWasListeningBeforePTT) {
+        startLiveAudioStream();
+      }
     }
   }
 }
@@ -307,16 +357,21 @@ function togglePTT() {
 function deactivatePTT() {
   if (pttActive) {
     pttActive = false;
-    // RX mode - solid green background (consistent look)
+    // RX mode - solid green background
     pttBtn.className = 'btn btn-success';
     pttBtn.style.backgroundColor = '#28a745';
     pttBtn.style.color = 'white';
     socket.emit('ptt_control', { action: 'off' });
 
-    // Restore audio only if we muted it for TX
-    if (rxAudioEl && audioMutedByPTT) {
-      rxAudioEl.muted = false;
-      audioMutedByPTT = false;
+    if (rxAudioEl) {
+      if (audioMutedByPTT) {
+        rxAudioEl.muted = false;
+        rxAudioEl.volume = audioPrevVolume || 1.0;
+        audioMutedByPTT = false;
+      }
+      if (audioWasListeningBeforePTT) {
+        startLiveAudioStream();
+      }
     }
   }
 }

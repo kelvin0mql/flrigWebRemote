@@ -446,91 +446,55 @@ def handle_ptt_control(data):
 
 _ffmpeg_proc_ogg = None
 _ffmpeg_proc_mp3 = None
+_ffmpeg_proc_aac = None
 
 def _ffmpeg_common_input_args(alsa_device: str):
-    # Low-latency capture chain
     return [
         "-hide_banner",
         "-loglevel", "warning",
         "-f", "alsa",
         "-thread_queue_size", "1024",
         "-ac", "1",
-        "-ar", "48000",
+        "-ar", "44100",  # 44.1k often plays nicer on iOS for low-latency live
         "-i", alsa_device,
-        # Low-latency output tuning
         "-fflags", "nobuffer",
         "-probesize", "32",
         "-analyzeduration", "0",
         "-flush_packets", "1"
     ]
 
-def start_ffmpeg_rx_stream_ogg(alsa_device: str):
-    global _ffmpeg_proc_ogg
-    if _ffmpeg_proc_ogg and _ffmpeg_proc_ogg.poll() is None:
-        return _ffmpeg_proc_ogg
+def start_ffmpeg_rx_stream_aac(alsa_device: str):
+    global _ffmpeg_proc_aac
+    if _ffmpeg_proc_aac and _ffmpeg_proc_aac.poll() is None:
+        return _ffmpeg_proc_aac
     if not alsa_device:
-        print("No ALSA input device configured; Ogg stream unavailable.")
+        print("No ALSA input device configured; AAC stream unavailable.")
         return None
     cmd = [
         "ffmpeg",
         *_ffmpeg_common_input_args(alsa_device),
-        "-c:a", "libopus",
-        "-b:a", "64k",
-        "-application", "lowdelay",
-        "-frame_duration", "20",
-        "-f", "ogg",
-        "-"
-    ]
-    try:
-        _ffmpeg_proc_ogg = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
-        print(f"Started ffmpeg Ogg/Opus stream from {alsa_device}")
-        return _ffmpeg_proc_ogg
-    except Exception as e:
-        print(f"Failed to start Ogg/Opus stream: {e}")
-        _ffmpeg_proc_ogg = None
-        return None
-
-def start_ffmpeg_rx_stream_mp3(alsa_device: str):
-    global _ffmpeg_proc_mp3
-    if _ffmpeg_proc_mp3 and _ffmpeg_proc_mp3.poll() is None:
-        return _ffmpeg_proc_mp3
-    if not alsa_device:
-        print("No ALSA input device configured; MP3 stream unavailable.")
-        return None
-    cmd = [
-        "ffmpeg",
-        *_ffmpeg_common_input_args(alsa_device),
-        "-c:a", "libmp3lame",
+        "-c:a", "aac",
         "-b:a", "96k",
-        "-f", "mp3",
+        "-f", "adts",  # raw AAC (ADTS) is well-supported by iOS
         "-"
     ]
     try:
-        _ffmpeg_proc_mp3 = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
-        print(f"Started ffmpeg MP3 stream from {alsa_device}")
-        return _ffmpeg_proc_mp3
+        _ffmpeg_proc_aac = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
+        print(f"Started ffmpeg AAC (ADTS) stream from {alsa_device}")
+        return _ffmpeg_proc_aac
     except Exception as e:
-        print(f"Failed to start MP3 stream: {e}")
-        _ffmpeg_proc_mp3 = None
+        print(f"Failed to start AAC stream: {e}")
+        _ffmpeg_proc_aac = None
         return None
 
-def _stream_proc_stdout(proc):
-    if not proc or not proc.stdout:
-        return
-    while True:
-        chunk = proc.stdout.read(4096)
-        if not chunk:
-            break
-        yield chunk
-
-@app.route('/audio')
-def audio_ogg():
-    # Ogg/Opus stream (Chromium/Firefox)
+@app.route('/audio.aac')
+def audio_aac():
+    # AAC/ADTS stream for iOS (preferred)
     alsa_in = AUDIO_CONFIG.get("audio_in", {}).get("alsa_device")
-    proc = start_ffmpeg_rx_stream_ogg(alsa_in)
+    proc = start_ffmpeg_rx_stream_aac(alsa_in)
     if not proc:
         return Response("Audio not available\n", status=503, mimetype="text/plain")
-    resp = Response(stream_with_context(_stream_proc_stdout(proc)), mimetype="audio/ogg")
+    resp = Response(stream_with_context(_stream_proc_stdout(proc)), mimetype="audio/aac")
     resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     resp.headers["Pragma"] = "no-cache"
     return resp

@@ -54,7 +54,7 @@
 
             <!-- RX Audio (live; no scrubbing, explicit start/stop to save bandwidth) -->
             <div class="text-center mb-4">
-                <!-- No source set initially; we will attach the correct live URL on demand -->
+                <!-- Prefer iOS-friendly AAC; we’ll set src programmatically when “Listen” is pressed -->
                 <audio id="rx-audio" playsinline preload="none" style="display:none;"></audio>
                 <div class="d-inline-flex align-items-center gap-2">
                     <button id="audio-toggle" class="btn btn-outline-secondary">Listen</button>
