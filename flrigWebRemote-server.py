@@ -460,8 +460,17 @@ def start_ffmpeg_rx_stream_mp3(alsa_device: str):
     cmd = [
         "ffmpeg",
         *_ffmpeg_common_input_args(alsa_device),
+        # Voice-tailored passband and sample rate
+        "-af", "highpass=f=300,lowpass=f=3000",
+        # Force mono + 22050 Hz on output (good Safari compatibility, smaller buffers)
+        "-ac", "1",
+        "-ar", "22050",
+        # CBR, no VBR/Xing header, no bit reservoir (lower startup/decoder delay)
         "-c:a", "libmp3lame",
-        "-b:a", "96k",
+        "-b:a", "24k",
+        "-write_xing", "0",
+        "-reservoir", "0",
+        # Stream as raw MP3 frames over HTTP
         "-f", "mp3",
         "-"
     ]
