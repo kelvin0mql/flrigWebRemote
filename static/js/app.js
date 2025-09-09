@@ -49,20 +49,11 @@ function stopLiveAudioStream() {
 
 function startLiveAudioStream() {
   if (!rxAudioEl) return;
-  // Prefer iOS-friendly AAC stream; fallback to MP3/OGG if needed
-  const candidates = [
-    { url: '/audio.aac', type: 'audio/aac' },
-    { url: '/audio.mp3', type: 'audio/mpeg' },
-    { url: '/audio',     type: 'audio/ogg'  }
-  ];
-  let chosen = candidates[0].url;
-  for (const c of candidates) {
-    if (rxAudioEl.canPlayType(c.type)) { chosen = c.url; break; }
-  }
-  // Force a fresh live edge connection
+  // MP3 only, keep source consistent and reconnect at live edge
+  const liveUrl = '/audio.mp3';
   rxAudioEl.removeAttribute('src');
   rxAudioEl.load();
-  rxAudioEl.src = chosen;
+  rxAudioEl.src = liveUrl;
   rxAudioEl.muted = false;
   try { rxAudioEl.play(); } catch (_) {}
 }

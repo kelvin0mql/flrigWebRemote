@@ -424,38 +424,25 @@ def handle_connect():
 def handle_disconnect():
     print('Client disconnected')
 
-@socketio.on('frequency_change')
-def handle_frequency_change(data):
-    """Handle frequency change requests."""
-    success, message = flrig_remote.set_frequency(data['frequency'])
-    emit('frequency_changed', {'success': success, 'error': message if not success else None})
-
-@socketio.on('tune_control')
-def handle_tune_control(data):
-    """Handle tuner control requests."""
-    success, message = flrig_remote.tune_control(data['action'])
-    emit('tune_response', {'success': success, 'error': message if not success else None})
-
 @socketio.on('ptt_control')
 def handle_ptt_control(data):
     """Handle PTT control requests."""
     success, message = flrig_remote.ptt_control(data['action'])
     emit('ptt_response', {'success': success, 'error': message if not success else None})
 
-# ------------- Audio streaming (live, low-latency) -------------
+# ------------- Audio streaming (live, low-latency, MP3 only) -------------
 
-_ffmpeg_proc_ogg = None
 _ffmpeg_proc_mp3 = None
-_ffmpeg_proc_aac = None
 
 def _ffmpeg_common_input_args(alsa_device: str):
+    # Low-latency ALSA capture chain
     return [
         "-hide_banner",
         "-loglevel", "warning",
         "-f", "alsa",
         "-thread_queue_size", "1024",
         "-ac", "1",
-        "-ar", "44100",  # 44.1k often plays nicer on iOS for low-latency live
+        "-ar", "44100",
         "-i", alsa_device,
         "-fflags", "nobuffer",
         "-probesize", "32",
@@ -463,45 +450,59 @@ def _ffmpeg_common_input_args(alsa_device: str):
         "-flush_packets", "1"
     ]
 
-def start_ffmpeg_rx_stream_aac(alsa_device: str):
-    global _ffmpeg_proc_aac
-    if _ffmpeg_proc_aac and _ffmpeg_proc_aac.poll() is None:
-        return _ffmpeg_proc_aac
+def start_ffmpeg_rx_stream_mp3(alsa_device: str):
+    global _ffmpeg_proc_mp3
+    if _ffmpeg_proc_mp3 and _ffmpeg_proc_mp3.poll() is None:
+        return _ffmpeg_proc_mp3
     if not alsa_device:
-        print("No ALSA input device configured; AAC stream unavailable.")
+        print("No ALSA input device configured; MP3 stream unavailable.")
         return None
     cmd = [
         "ffmpeg",
         *_ffmpeg_common_input_args(alsa_device),
-        "-c:a", "aac",
+        "-c:a", "libmp3lame",
         "-b:a", "96k",
-        "-f", "adts",  # raw AAC (ADTS) is well-supported by iOS
+        "-f", "mp3",
         "-"
     ]
     try:
-        _ffmpeg_proc_aac = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
-        print(f"Started ffmpeg AAC (ADTS) stream from {alsa_device}")
-        return _ffmpeg_proc_aac
+        _ffmpeg_proc_mp3 = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            bufsize=0
+        )
+        print(f"Started ffmpeg MP3 stream from {alsa_device}")
+        return _ffmpeg_proc_mp3
     except Exception as e:
-        print(f"Failed to start AAC stream: {e}")
-        _ffmpeg_proc_aac = None
+        print(f"Failed to start MP3 stream: {e}")
+        _ffmpeg_proc_mp3 = None
         return None
 
-@app.route('/audio.aac')
-def audio_aac():
-    # AAC/ADTS stream for iOS (preferred)
+def _stream_proc_stdout(proc):
+    if not proc or not proc.stdout:
+        return
+    while True:
+        chunk = proc.stdout.read(4096)
+        if not chunk:
+            break
+        yield chunk
+
+@app.route('/audio')
+def audio_alias_to_mp3():
+    # Serve MP3 on /audio for simplicity/compat
     alsa_in = AUDIO_CONFIG.get("audio_in", {}).get("alsa_device")
-    proc = start_ffmpeg_rx_stream_aac(alsa_in)
+    proc = start_ffmpeg_rx_stream_mp3(alsa_in)
     if not proc:
         return Response("Audio not available\n", status=503, mimetype="text/plain")
-    resp = Response(stream_with_context(_stream_proc_stdout(proc)), mimetype="audio/aac")
+    resp = Response(stream_with_context(_stream_proc_stdout(proc)), mimetype="audio/mpeg")
     resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
     resp.headers["Pragma"] = "no-cache"
     return resp
 
 @app.route('/audio.mp3')
 def audio_mp3():
-    # MP3 stream (Safari/iOS and broad compatibility)
+    # MP3 stream
     alsa_in = AUDIO_CONFIG.get("audio_in", {}).get("alsa_device")
     proc = start_ffmpeg_rx_stream_mp3(alsa_in)
     if not proc:
