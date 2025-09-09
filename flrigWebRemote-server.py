@@ -4,6 +4,16 @@ import xmlrpc.client
 import threading
 import time
 from datetime import datetime
+# ... existing code ...
+import os
+import json
+import sys
+
+try:
+    import sounddevice as sd  # Linux-friendly, ALSA/Pulse
+except ImportError:
+    sd = None
+    print("Warning: python-sounddevice is not installed. Audio device selection will be skipped.")
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'flrig-web-remote-secret'
@@ -13,6 +23,139 @@ socketio = SocketIO(app, cors_allowed_origins="*")
 FLRIG_HOST = "localhost"  # Changed to localhost since running on same machine
 FLRIG_PORT = 12345           # Default flrig XML-RPC port
 server_url = f"http://{FLRIG_HOST}:{FLRIG_PORT}/RPC2"
+
+# --- Audio configuration (Linux-first) ---
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+CONFIG_PATH = os.path.join(SCRIPT_DIR, "flrigWebRemote.config.json")
+
+def load_config():
+    if os.path.exists(CONFIG_PATH):
+        try:
+            with open(CONFIG_PATH, "r") as f:
+                return json.load(f)
+        except Exception as e:
+            print(f"Warning: failed to read config: {e}")
+    return {}
+
+def save_config(cfg: dict):
+    try:
+        with open(CONFIG_PATH, "w") as f:
+            json.dump(cfg, f, indent=2)
+        print(f"Saved configuration to {CONFIG_PATH}")
+    except Exception as e:
+        print(f"Error saving config: {e}")
+
+def enumerate_input_devices_linux():
+    """Return list of input-capable devices from sounddevice (index, name, hostapi, max_input_channels)."""
+    if sd is None:
+        return []
+    devices = sd.query_devices()
+    hostapis = sd.query_hostapis()
+    result = []
+    for idx, d in enumerate(devices):
+        if d.get("max_input_channels", 0) > 0:
+            hostapi_name = hostapis[d["hostapi"]]["name"] if d.get("hostapi") is not None else "unknown"
+            result.append({
+                "index": idx,
+                "name": d.get("name", f"Device {idx}"),
+                "hostapi": hostapi_name,
+                "channels": d.get("max_input_channels", 0)
+            })
+    # Prefer USB devices by sorting them to the top
+    result.sort(key=lambda x: (0 if "usb" in x["name"].lower() else 1, x["index"]))
+    return result
+
+def prompt_select_device(devices):
+    """Interactive prompt to select device; returns selected device dict or None."""
+    if not devices:
+        print("No input-capable audio devices found.")
+        return None
+
+    print("\nAvailable input audio devices (Linux):")
+    for i, d in enumerate(devices):
+        usb_tag = " [USB]" if "usb" in d["name"].lower() else ""
+        print(f"  {i}) idx={d['index']:>2}  {d['name']}  ({d['hostapi']}, ch={d['channels']}){usb_tag}")
+
+    while True:
+        sel = input("Select device number (or press Enter to pick first listed): ").strip()
+        if sel == "":
+            return devices[0]
+        if sel.isdigit():
+            n = int(sel)
+            if 0 <= n < len(devices):
+                return devices[n]
+        print("Invalid selection. Try again.")
+
+def auto_pick_device(devices):
+    """Non-interactive fallback: first USB if available, else first input device."""
+    if not devices:
+        return None
+    return devices[0]
+
+def ensure_audio_config(force_reconfigure: bool = False):
+    """
+    Ensure we have an audio device configured.
+    - Loads existing config if present and valid.
+    - Otherwise, enumerates devices and prompts (if TTY), or auto-picks (if not).
+    """
+    cfg = load_config()
+    if sd is None:
+        print("sounddevice not available; skipping audio device setup.")
+        return cfg
+
+    def device_exists(dev_idx):
+        try:
+            d = sd.query_devices(dev_idx)
+            return (d.get("max_input_channels", 0) > 0)
+        except Exception:
+            return False
+
+    need_reconfigure = force_reconfigure or ("audio" not in cfg) or ("device_index" not in cfg.get("audio", {}))
+    if not need_reconfigure:
+        # Validate the stored device
+        dev_idx = cfg["audio"]["device_index"]
+        if not device_exists(dev_idx):
+            print(f"Configured device index {dev_idx} no longer available. Reconfiguration needed.")
+            need_reconfigure = True
+
+    if not need_reconfigure:
+        # Already good
+        print(f"Using configured audio device idx={cfg['audio']['device_index']}: {cfg['audio'].get('device_name','')}")
+        return cfg
+
+    devices = enumerate_input_devices_linux()
+    # If no devices found
+    if not devices:
+        print("No input-capable audio devices found. Proceeding without audio configuration.")
+        return cfg
+
+    # Interactive if possible
+    if sys.stdin.isatty():
+        picked = prompt_select_device(devices)
+    else:
+        picked = auto_pick_device(devices)
+        print(f"Non-interactive mode: auto-selected idx={picked['index']} ({picked['name']})")
+
+    if picked is None:
+        print("No device selected. Proceeding without audio configuration.")
+        return cfg
+
+    # Save config
+    cfg.setdefault("audio", {})
+    cfg["audio"]["device_index"] = picked["index"]
+    cfg["audio"]["device_name"] = picked["name"]
+    cfg["audio"]["hostapi"] = picked["hostapi"]
+    cfg["audio"]["channels"] = picked["channels"]
+    save_config(cfg)
+
+    print(f"Selected audio device idx={picked['index']}: {picked['name']} ({picked['hostapi']}, ch={picked['channels']})")
+    return cfg
+
+# Optional CLI flag to force reconfiguration: --reconfigure-audio
+FORCE_RECONFIG = ("--reconfigure-audio" in sys.argv)
+
+# Initialize audio configuration on startup
+AUDIO_CONFIG = ensure_audio_config(force_reconfigure=FORCE_RECONFIG)
 
 class FlrigWebRemote:
     def __init__(self):
@@ -31,181 +174,7 @@ class FlrigWebRemote:
             'last_update': 'Never'
         }
         self.initialize_connection()
-
-    def initialize_connection(self):
-        """Initialize connection to flrig."""
-        try:
-            self.client = xmlrpc.client.ServerProxy(server_url)
-            # Test the connection
-            self.client.rig.get_vfoA()
-            self.current_data['connected'] = True
-            print(f"Connected to flrig at {server_url}")
-        except Exception as e:
-            print(f"Error connecting to flrig: {e}")
-            self.client = None
-            self.current_data['connected'] = False
-
-    def update_data(self):
-        """Fetch current data from flrig."""
-        if not self.client:
-            self.initialize_connection()
-            return
-
-        try:
-            # Get frequency data - change to show kHz format like flrig
-            freq_a_hz = float(self.client.rig.get_vfoA())
-            self.current_data['frequency_a'] = f"{freq_a_hz / 1e3:.2f}"  # Changed to kHz with 2 decimals
-
-            try:
-                freq_b_hz = float(self.client.rig.get_vfoB())
-                self.current_data['frequency_b'] = f"{freq_b_hz / 1e3:.2f}"  # Changed to kHz with 2 decimals
-            except:
-                self.current_data['frequency_b'] = "N/A"
-
-            # Get mode and bandwidth
-            try:
-                self.current_data['mode'] = self.client.rig.get_mode()
-            except:
-                self.current_data['mode'] = "Unknown"
-
-            try:
-                self.current_data['bandwidth'] = str(self.client.rig.get_bw())
-            except:
-                self.current_data['bandwidth'] = "Unknown"
-
-            # Get power and SWR
-            try:
-                self.current_data['power'] = int(float(self.client.rig.get_power()))
-            except:
-                self.current_data['power'] = 0
-
-            try:
-                self.current_data['swr'] = float(self.client.rig.get_swr())
-            except:
-                self.current_data['swr'] = 0.0
-
-            # Get control levels (these might not be available on all rigs)
-            try:
-                self.current_data['rf_gain'] = int(float(self.client.rig.get_rf_gain()))
-            except:
-                self.current_data['rf_gain'] = 0
-
-            try:
-                self.current_data['mic_gain'] = int(float(self.client.rig.get_mic_gain()))
-            except:
-                self.current_data['mic_gain'] = 0
-
-            try:
-                self.current_data['volume'] = int(float(self.client.rig.get_volume()))
-            except:
-                self.current_data['volume'] = 0
-
-            self.current_data['connected'] = True
-            self.current_data['last_update'] = datetime.now().strftime("%H:%M:%S")
-
-        except Exception as e:
-            print(f"Error updating data from flrig: {e}")
-            self.current_data['connected'] = False
-            self.initialize_connection()
-
-    def set_frequency(self, frequency_hz):
-        """Set radio frequency."""
-        if not self.client:
-            return False, "Not connected to flrig"
-
-        try:
-            # Add debug logging
-            print(f"Attempting to set frequency to: {frequency_hz}Hz (type: {type(frequency_hz)})")
-
-            # flrig expects a DOUBLE/FLOAT, not integer!
-            freq_hz_float = float(frequency_hz)
-            print(f"Converted to float: {freq_hz_float}")
-
-            self.client.rig.set_vfoA(freq_hz_float)
-            return True, "Frequency set successfully"
-        except Exception as e:
-            print(f"Error setting frequency: {e}")
-            return False, str(e)
-
-    def tune_control(self, action):
-        """Control tuner."""
-        if not self.client:
-            return False, "Not connected to flrig"
-
-        try:
-            if action == 'start':
-                # Start tuning - this might vary by radio model
-                self.client.rig.tune(1)  # or self.client.rig.set_tune(1)
-            else:
-                # Stop tuning
-                self.client.rig.tune(0)  # or self.client.rig.set_tune(0)
-            return True, f"Tune {action} successful"
-        except Exception as e:
-            print(f"Error controlling tuner: {e}")
-            return False, str(e)
-
-    def ptt_control(self, action):
-        """Control PTT."""
-        if not self.client:
-            return False, "Not connected to flrig"
-
-        try:
-            if action == 'on':
-                self.client.rig.set_ptt(1)
-            else:
-                self.client.rig.set_ptt(0)
-            return True, f"PTT {action} successful"
-        except Exception as e:
-            print(f"Error controlling PTT: {e}")
-            return False, str(e)
-
-# Global instance
-flrig_remote = FlrigWebRemote()
-
-@app.route('/')
-def index():
-    """Main page."""
-    return render_template('index.html')
-
-@app.route('/api/status')
-def api_status():
-    """API endpoint to get current status."""
-    return jsonify(flrig_remote.current_data)
-
-def background_updater():
-    """Background thread to update flrig data and emit to clients."""
-    while True:
-        flrig_remote.update_data()
-        socketio.emit('status_update', flrig_remote.current_data)
-        time.sleep(2)  # Update every 2 seconds
-
-@socketio.on('connect')
-def handle_connect():
-    print('Client connected')
-    emit('status_update', flrig_remote.current_data)
-
-@socketio.on('disconnect')
-def handle_disconnect():
-    print('Client disconnected')
-
-@socketio.on('frequency_change')
-def handle_frequency_change(data):
-    """Handle frequency change requests."""
-    success, message = flrig_remote.set_frequency(data['frequency'])
-    emit('frequency_changed', {'success': success, 'error': message if not success else None})
-
-@socketio.on('tune_control')
-def handle_tune_control(data):
-    """Handle tuner control requests."""
-    success, message = flrig_remote.tune_control(data['action'])
-    emit('tune_response', {'success': success, 'error': message if not success else None})
-
-@socketio.on('ptt_control')
-def handle_ptt_control(data):
-    """Handle PTT control requests."""
-    success, message = flrig_remote.ptt_control(data['action'])
-    emit('ptt_response', {'success': success, 'error': message if not success else None})
-
+# ... existing code ...
 if __name__ == '__main__':
     # Start background updater thread
     update_thread = threading.Thread(target=background_updater, daemon=True)
