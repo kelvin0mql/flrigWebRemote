@@ -52,6 +52,11 @@
                 </div>
             </div>
 
+            <!-- RX Audio (Ogg/Opus stream from /audio) -->
+            <div class="text-center mb-4">
+                <audio id="rx-audio" src="/audio" controls autoplay playsinline muted style="max-width: 320px; width: 100%;"></audio>
+            </div>
+
             <!-- Control Sliders Row 1: Mic and Power -->
             <div class="row mb-4">
                 <div class="col-md-6">
@@ -154,5 +159,31 @@
 
 <script src="https://cdn.socket.io/4.5.0/socket.io.min.js"></script>
 <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+<script>
+  // Ensure audio starts on first user interaction (needed on iOS)
+  (function () {
+    const audioEl = document.getElementById('rx-audio');
+    if (!audioEl) return;
+
+    const unlock = () => {
+      try {
+        audioEl.muted = false;
+        const p = audioEl.play();
+        if (p && typeof p.then === 'function') {
+          p.catch(() => {/* ignore autoplay block errors */});
+        }
+      } catch (e) {}
+      window.removeEventListener('touchstart', unlock, { passive: true });
+      window.removeEventListener('click', unlock, { passive: true });
+    };
+
+    // Try immediately for desktop
+    unlock();
+
+    // Fallback: unmute/play on first interaction (mobile)
+    window.addEventListener('touchstart', unlock, { passive: true });
+    window.addEventListener('click', unlock, { passive: true });
+  })();
+</script>
 </body>
 </html>
