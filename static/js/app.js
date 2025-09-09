@@ -23,7 +23,11 @@ const pttBtn = document.getElementById('ptt-btn');
 
 // Live audio elements (may or may not exist depending on the page)
 const rxAudioEl = document.getElementById('rx-audio');
-const audioToggleBtn = document.getElementById('audio-toggle');
+// const audioToggleBtn = document.getElementById('audio-toggle'); // removed
+const listenWavBtn = document.getElementById('listen-wav');
+const listenMp3Btn = document.getElementById('listen-mp3');
+
+let currentStreamKind = null; // 'wav' | 'mp3' | null
 
 // Current frequency for digit manipulation
 let currentFrequencyHz = 0;
@@ -40,29 +44,70 @@ function isListening() {
   return rxAudioEl && rxAudioEl.getAttribute('src') && !rxAudioEl.paused;
 }
 
+function updateListenButtons() {
+  if (!listenWavBtn || !listenMp3Btn) return;
+  if (isListening()) {
+    if (currentStreamKind === 'wav') {
+      listenWavBtn.textContent = 'Stop WAV';
+      listenWavBtn.className = 'btn btn-secondary';
+      listenMp3Btn.textContent = 'Listen MP3';
+      listenMp3Btn.className = 'btn btn-outline-secondary';
+    } else if (currentStreamKind === 'mp3') {
+      listenMp3Btn.textContent = 'Stop MP3';
+      listenMp3Btn.className = 'btn btn-secondary';
+      listenWavBtn.textContent = 'Listen WAV';
+      listenWavBtn.className = 'btn btn-outline-secondary';
+    }
+  } else {
+    listenWavBtn.textContent = 'Listen WAV';
+    listenMp3Btn.textContent = 'Listen MP3';
+    listenWavBtn.className = 'btn btn-outline-secondary';
+    listenMp3Btn.className = 'btn btn-outline-secondary';
+  }
+}
+
 function stopLiveAudioStream() {
   if (!rxAudioEl) return;
   try { rxAudioEl.pause(); } catch (_) {}
   rxAudioEl.removeAttribute('src');
   rxAudioEl.load(); // closes HTTP stream and clears buffer
+  currentStreamKind = null;
+  updateListenButtons();
 }
 
-function startLiveAudioStream() {
+function startLiveAudioStream(kind) {
   if (!rxAudioEl) return;
-  // Prefer uncompressed WAV (lowest latency) on LAN; fallback to MP3
-  const candidates = [
-    { url: '/audio.wav', type: 'audio/wav'   },
-    { url: '/audio.mp3', type: 'audio/mpeg' }
-  ];
-  let liveUrl = candidates[0].url;
-  for (const c of candidates) {
-    if (rxAudioEl.canPlayType(c.type)) { liveUrl = c.url; break; }
-  }
+  const liveUrl = (kind === 'wav') ? '/audio.wav' : '/audio.mp3';
   rxAudioEl.removeAttribute('src');
   rxAudioEl.load();
   rxAudioEl.src = liveUrl;
   rxAudioEl.muted = false;
-  try { rxAudioEl.play(); } catch (_) {}
+  currentStreamKind = kind;
+  try { rxAudioEl.play().catch(() => {}); } catch (_) {}
+  updateListenButtons();
+}
+
+// Wire up the two listen buttons
+if (listenWavBtn) {
+  listenWavBtn.addEventListener('click', () => {
+    if (isListening() && currentStreamKind === 'wav') {
+      stopLiveAudioStream();
+    } else {
+      // If another stream is active, stop it first
+      if (isListening()) stopLiveAudioStream();
+      startLiveAudioStream('wav');
+    }
+  });
+}
+if (listenMp3Btn) {
+  listenMp3Btn.addEventListener('click', () => {
+    if (isListening() && currentStreamKind === 'mp3') {
+      stopLiveAudioStream();
+    } else {
+      if (isListening()) stopLiveAudioStream();
+      startLiveAudioStream('mp3');
+    }
+  });
 }
 
 // Global event listener setup - only do this once
@@ -325,7 +370,6 @@ function togglePTT() {
         rxAudioEl.volume = 0;
         audioMutedByPTT = true;
       }
-      // Hard stop the stream to avoid any residual audio and save bandwidth
       if (isListening()) {
         stopLiveAudioStream();
       }
@@ -344,9 +388,10 @@ function togglePTT() {
         rxAudioEl.volume = audioPrevVolume || 1.0;
         audioMutedByPTT = false;
       }
-      // If you were listening before TX, bring the stream back at the live edge
-      if (audioWasListeningBeforePTT) {
-        startLiveAudioStream();
+      if (audioWasListeningBeforePTT && currentStreamKind) {
+        startLiveAudioStream(currentStreamKind);
+      } else {
+        updateListenButtons();
       }
     }
   }
@@ -367,12 +412,17 @@ function deactivatePTT() {
         rxAudioEl.volume = audioPrevVolume || 1.0;
         audioMutedByPTT = false;
       }
-      if (audioWasListeningBeforePTT) {
-        startLiveAudioStream();
+      if (audioWasListeningBeforePTT && currentStreamKind) {
+        startLiveAudioStream(currentStreamKind);
+      } else {
+        updateListenButtons();
       }
     }
   }
 }
+
+// Initialize buttons state on load
+document.addEventListener('DOMContentLoaded', updateListenButtons);
 
 // Handle server responses
 socket.on('frequency_changed', function(data) {

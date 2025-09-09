@@ -52,14 +52,12 @@
                 </div>
             </div>
 
-            <!-- RX Audio (live; no scrubbing, explicit start/stop to save bandwidth) -->
+            <!-- RX Audio (live; no scrubbing, explicit start/stop per codec) -->
             <div class="text-center mb-4">
-                <!-- Prefer iOS-friendly AAC; we’ll set src programmatically when “Listen” is pressed -->
                 <audio id="rx-audio" playsinline preload="none" style="display:none;"></audio>
                 <div class="d-inline-flex align-items-center gap-2">
-                    <button id="audio-toggle" class="btn btn-outline-secondary">Listen</button>
-                    <label class="form-label mb-0">Vol</label>
-                    <input id="audio-volume" type="range" min="0" max="100" value="80" class="form-range" style="width:200px;">
+                    <button id="listen-wav" class="btn btn-outline-secondary">Listen WAV</button>
+                    <button id="listen-mp3" class="btn btn-outline-secondary">Listen MP3</button>
                 </div>
             </div>
 
@@ -165,88 +163,5 @@
 
 <script src="https://cdn.socket.io/4.5.0/socket.io.min.js"></script>
 <script src="{{ url_for('static', filename='js/app.js') }}"></script>
-<script>
-  (function () {
-    const audioEl = document.getElementById('rx-audio');
-    const toggleBtn = document.getElementById('audio-toggle');
-    const vol = document.getElementById('audio-volume');
-    if (!audioEl || !toggleBtn || !vol) return;
-
-    // Candidate live endpoints (Safari prefers MP3)
-    const CANDIDATE_URLS = [
-      { url: '/audio.mp3', type: 'audio/mpeg' },
-      { url: '/audio',     type: 'audio/ogg'  }
-    ];
-
-    // Pick the first URL the browser says it can play
-    function pickLiveUrl() {
-      for (const c of CANDIDATE_URLS) {
-        if (audioEl.canPlayType(c.type)) return c.url;
-      }
-      // Fallback to MP3 if canPlayType is inconclusive
-      return '/audio.mp3';
-    }
-
-    // Keep volume in sync
-    audioEl.volume = vol.value / 100;
-    vol.addEventListener('input', () => {
-      audioEl.volume = vol.value / 100;
-    });
-
-    function setButton(listening) {
-      if (listening) {
-        toggleBtn.textContent = 'Stop';
-        toggleBtn.className = 'btn btn-secondary';
-      } else {
-        toggleBtn.textContent = 'Listen';
-        toggleBtn.className = 'btn btn-outline-secondary';
-      }
-    }
-
-    async function startStream() {
-      // Attach fresh live URL; this ensures we connect at the live edge
-      const liveUrl = pickLiveUrl();
-      // If the src is already set to same URL, force a reload by clearing first
-      if (audioEl.getAttribute('src')) {
-        audioEl.removeAttribute('src');
-        audioEl.load();
-      }
-      audioEl.src = liveUrl;
-
-      // Unmute and play on user gesture
-      audioEl.muted = false;
-      try {
-        await audioEl.play();
-        setButton(true);
-      } catch (e) {
-        // If autoplay is still blocked by browser policy, user can click again
-        setButton(false);
-      }
-    }
-
-    function stopStream() {
-      // Fully halt network and release buffers
-      try { audioEl.pause(); } catch (_) {}
-      audioEl.removeAttribute('src');
-      audioEl.load(); // Important: actually closes the HTTP connection and discards buffer
-      setButton(false);
-    }
-
-    toggleBtn.addEventListener('click', async () => {
-      // If we have a source, treat as listening; otherwise stopped
-      const listening = !!audioEl.getAttribute('src') && !audioEl.paused;
-      if (listening) {
-        stopStream();
-      } else {
-        await startStream();
-      }
-    });
-
-    // Disallow seeking entirely (defense-in-depth)
-    audioEl.addEventListener('seeking', () => {
-      try { audioEl.currentTime = Number.MAX_SAFE_INTEGER; } catch (_) {}
-    });
-  })();
-</script>
 </body>
 </html>

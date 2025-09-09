@@ -436,22 +436,6 @@ _ffmpeg_proc_mp3 = None
 _ffmpeg_proc_wav = None  # add WAV
 
 def _ffmpeg_common_input_args(alsa_device: str):
-    # Low-latency ALSA capture chain
-    return [
-        "-hide_banner",
-        "-loglevel", "warning",
-        "-f", "alsa",
-        "-thread_queue_size", "1024",
-        "-ac", "1",
-        "-ar", "16000",  # use 16k capture for voice; ALSA will resample if needed
-        "-i", alsa_device,
-        "-fflags", "nobuffer",
-        "-probesize", "32",
-        "-analyzeduration", "0",
-        "-flush_packets", "1"
-    ]
-
-def _ffmpeg_common_input_args(alsa_device: str):
     # Low-latency ALSA capture chain with wallclock pacing
     return [
         "-hide_banner",
