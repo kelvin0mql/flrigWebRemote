@@ -52,9 +52,18 @@
                 </div>
             </div>
 
-            <!-- RX Audio (Ogg/Opus stream from /audio) -->
+            <!-- RX Audio (live; no scrubbing) -->
             <div class="text-center mb-4">
-                <audio id="rx-audio" src="/audio" controls autoplay playsinline muted style="max-width: 320px; width: 100%;"></audio>
+                <!-- Multiple sources for broad compatibility; Safari prefers MP3 -->
+                <audio id="rx-audio" autoplay playsinline muted preload="none" style="display:none;">
+                    <source src="/audio.mp3" type="audio/mpeg">
+                    <source src="/audio" type="audio/ogg">
+                </audio>
+                <div class="d-inline-flex align-items-center gap-2">
+                    <button id="audio-toggle" class="btn btn-outline-secondary">Play</button>
+                    <label class="form-label mb-0">Vol</label>
+                    <input id="audio-volume" type="range" min="0" max="100" value="80" class="form-range" style="width:200px;">
+                </div>
             </div>
 
             <!-- Control Sliders Row 1: Mic and Power -->
@@ -160,29 +169,54 @@
 <script src="https://cdn.socket.io/4.5.0/socket.io.min.js"></script>
 <script src="{{ url_for('static', filename='js/app.js') }}"></script>
 <script>
-  // Ensure audio starts on first user interaction (needed on iOS)
   (function () {
     const audioEl = document.getElementById('rx-audio');
-    if (!audioEl) return;
+    const toggleBtn = document.getElementById('audio-toggle');
+    const vol = document.getElementById('audio-volume');
 
-    const unlock = () => {
+    if (!audioEl || !toggleBtn || !vol) return;
+
+    // Initialize volume
+    audioEl.volume = vol.value / 100;
+
+    const ensurePlay = async () => {
       try {
         audioEl.muted = false;
-        const p = audioEl.play();
-        if (p && typeof p.then === 'function') {
-          p.catch(() => {/* ignore autoplay block errors */});
-        }
-      } catch (e) {}
+        await audioEl.play();
+        toggleBtn.textContent = 'Pause';
+        toggleBtn.className = 'btn btn-secondary';
+      } catch (e) {
+        // Autoplay blocked; keep button as "Play"
+      }
+    };
+
+    toggleBtn.addEventListener('click', async () => {
+      if (audioEl.paused) {
+        await ensurePlay();
+      } else {
+        audioEl.pause();
+        toggleBtn.textContent = 'Play';
+        toggleBtn.className = 'btn btn-outline-secondary';
+      }
+    });
+
+    vol.addEventListener('input', () => {
+      audioEl.volume = vol.value / 100;
+    });
+
+    // First interaction unlock for iOS
+    const unlock = async () => {
+      await ensurePlay();
       window.removeEventListener('touchstart', unlock, { passive: true });
       window.removeEventListener('click', unlock, { passive: true });
     };
-
-    // Try immediately for desktop
-    unlock();
-
-    // Fallback: unmute/play on first interaction (mobile)
     window.addEventListener('touchstart', unlock, { passive: true });
     window.addEventListener('click', unlock, { passive: true });
+
+    // Disallow seeking entirely (in case some browser exposes any programmatic seeking)
+    audioEl.addEventListener('seeking', () => {
+      try { audioEl.currentTime = audioEl.duration || Number.MAX_SAFE_INTEGER; } catch (_) {}
+    });
   })();
 </script>
 </body>

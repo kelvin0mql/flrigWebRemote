@@ -442,25 +442,14 @@ def handle_ptt_control(data):
     success, message = flrig_remote.ptt_control(data['action'])
     emit('ptt_response', {'success': success, 'error': message if not success else None})
 
-# ------------- Audio streaming (Ogg/Opus over HTTP) -------------
+# ------------- Audio streaming (live, low-latency) -------------
 
-_ffmpeg_proc = None
+_ffmpeg_proc_ogg = None
+_ffmpeg_proc_mp3 = None
 
-def start_ffmpeg_rx_stream(alsa_device: str):
-    """
-    Start a single ffmpeg process that reads from ALSA capture device and outputs Ogg/Opus to stdout.
-    Returns the subprocess.Popen object (or None on failure).
-    """
-    global _ffmpeg_proc
-    if _ffmpeg_proc and _ffmpeg_proc.poll() is None:
-        return _ffmpeg_proc
-
-    if not alsa_device:
-        print("No ALSA input device configured; RX audio stream will be unavailable.")
-        return None
-
-    cmd = [
-        "ffmpeg",
+def _ffmpeg_common_input_args(alsa_device: str):
+    # Low-latency capture chain
+    return [
         "-hide_banner",
         "-loglevel", "warning",
         "-f", "alsa",
@@ -468,6 +457,23 @@ def start_ffmpeg_rx_stream(alsa_device: str):
         "-ac", "1",
         "-ar", "48000",
         "-i", alsa_device,
+        # Low-latency output tuning
+        "-fflags", "nobuffer",
+        "-probesize", "32",
+        "-analyzeduration", "0",
+        "-flush_packets", "1"
+    ]
+
+def start_ffmpeg_rx_stream_ogg(alsa_device: str):
+    global _ffmpeg_proc_ogg
+    if _ffmpeg_proc_ogg and _ffmpeg_proc_ogg.poll() is None:
+        return _ffmpeg_proc_ogg
+    if not alsa_device:
+        print("No ALSA input device configured; Ogg stream unavailable.")
+        return None
+    cmd = [
+        "ffmpeg",
+        *_ffmpeg_common_input_args(alsa_device),
         "-c:a", "libopus",
         "-b:a", "64k",
         "-application", "lowdelay",
@@ -476,50 +482,70 @@ def start_ffmpeg_rx_stream(alsa_device: str):
         "-"
     ]
     try:
-        _ffmpeg_proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            bufsize=0
-        )
-        print(f"Started ffmpeg RX stream from {alsa_device}")
-        return _ffmpeg_proc
+        _ffmpeg_proc_ogg = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
+        print(f"Started ffmpeg Ogg/Opus stream from {alsa_device}")
+        return _ffmpeg_proc_ogg
     except Exception as e:
-        print(f"Failed to start ffmpeg RX stream: {e}")
-        _ffmpeg_proc = None
+        print(f"Failed to start Ogg/Opus stream: {e}")
+        _ffmpeg_proc_ogg = None
         return None
 
-def stream_audio_generator():
-    """
-    Yield audio bytes from the running ffmpeg process stdout.
-    If the process ends, stop streaming.
-    """
-    global _ffmpeg_proc
-    if not _ffmpeg_proc or _ffmpeg_proc.stdout is None:
-        return
+def start_ffmpeg_rx_stream_mp3(alsa_device: str):
+    global _ffmpeg_proc_mp3
+    if _ffmpeg_proc_mp3 and _ffmpeg_proc_mp3.poll() is None:
+        return _ffmpeg_proc_mp3
+    if not alsa_device:
+        print("No ALSA input device configured; MP3 stream unavailable.")
+        return None
+    cmd = [
+        "ffmpeg",
+        *_ffmpeg_common_input_args(alsa_device),
+        "-c:a", "libmp3lame",
+        "-b:a", "96k",
+        "-f", "mp3",
+        "-"
+    ]
     try:
-        while True:
-            chunk = _ffmpeg_proc.stdout.read(4096)
-            if not chunk:
-                break
-            yield chunk
-    finally:
-        # Do not kill the process here; keep a single shared encoder for all clients.
-        pass
+        _ffmpeg_proc_mp3 = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
+        print(f"Started ffmpeg MP3 stream from {alsa_device}")
+        return _ffmpeg_proc_mp3
+    except Exception as e:
+        print(f"Failed to start MP3 stream: {e}")
+        _ffmpeg_proc_mp3 = None
+        return None
+
+def _stream_proc_stdout(proc):
+    if not proc or not proc.stdout:
+        return
+    while True:
+        chunk = proc.stdout.read(4096)
+        if not chunk:
+            break
+        yield chunk
 
 @app.route('/audio')
-def audio():
-    """
-    HTTP endpoint that serves a continuous Ogg/Opus stream from the configured ALSA input device.
-    """
+def audio_ogg():
+    # Ogg/Opus stream (Chromium/Firefox)
     alsa_in = AUDIO_CONFIG.get("audio_in", {}).get("alsa_device")
-    proc = start_ffmpeg_rx_stream(alsa_in)
+    proc = start_ffmpeg_rx_stream_ogg(alsa_in)
     if not proc:
         return Response("Audio not available\n", status=503, mimetype="text/plain")
-    return Response(
-        stream_with_context(stream_audio_generator()),
-        mimetype="audio/ogg"
-    )
+    resp = Response(stream_with_context(_stream_proc_stdout(proc)), mimetype="audio/ogg")
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
+    return resp
+
+@app.route('/audio.mp3')
+def audio_mp3():
+    # MP3 stream (Safari/iOS and broad compatibility)
+    alsa_in = AUDIO_CONFIG.get("audio_in", {}).get("alsa_device")
+    proc = start_ffmpeg_rx_stream_mp3(alsa_in)
+    if not proc:
+        return Response("Audio not available\n", status=503, mimetype="text/plain")
+    resp = Response(stream_with_context(_stream_proc_stdout(proc)), mimetype="audio/mpeg")
+    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
+    resp.headers["Pragma"] = "no-cache"
+    return resp
 
 if __name__ == '__main__':
     # Start background updater thread
