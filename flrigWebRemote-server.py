@@ -1,4 +1,4 @@
-from flask import Flask, render_template, jsonify
+from flask import Flask, render_template, jsonify, Response, stream_with_context
 from flask_socketio import SocketIO, emit
 import xmlrpc.client
 import threading
@@ -441,6 +441,85 @@ def handle_ptt_control(data):
     """Handle PTT control requests."""
     success, message = flrig_remote.ptt_control(data['action'])
     emit('ptt_response', {'success': success, 'error': message if not success else None})
+
+# ------------- Audio streaming (Ogg/Opus over HTTP) -------------
+
+_ffmpeg_proc = None
+
+def start_ffmpeg_rx_stream(alsa_device: str):
+    """
+    Start a single ffmpeg process that reads from ALSA capture device and outputs Ogg/Opus to stdout.
+    Returns the subprocess.Popen object (or None on failure).
+    """
+    global _ffmpeg_proc
+    if _ffmpeg_proc and _ffmpeg_proc.poll() is None:
+        return _ffmpeg_proc
+
+    if not alsa_device:
+        print("No ALSA input device configured; RX audio stream will be unavailable.")
+        return None
+
+    cmd = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel", "warning",
+        "-f", "alsa",
+        "-thread_queue_size", "1024",
+        "-ac", "1",
+        "-ar", "48000",
+        "-i", alsa_device,
+        "-c:a", "libopus",
+        "-b:a", "64k",
+        "-application", "lowdelay",
+        "-frame_duration", "20",
+        "-f", "ogg",
+        "-"
+    ]
+    try:
+        _ffmpeg_proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            bufsize=0
+        )
+        print(f"Started ffmpeg RX stream from {alsa_device}")
+        return _ffmpeg_proc
+    except Exception as e:
+        print(f"Failed to start ffmpeg RX stream: {e}")
+        _ffmpeg_proc = None
+        return None
+
+def stream_audio_generator():
+    """
+    Yield audio bytes from the running ffmpeg process stdout.
+    If the process ends, stop streaming.
+    """
+    global _ffmpeg_proc
+    if not _ffmpeg_proc or _ffmpeg_proc.stdout is None:
+        return
+    try:
+        while True:
+            chunk = _ffmpeg_proc.stdout.read(4096)
+            if not chunk:
+                break
+            yield chunk
+    finally:
+        # Do not kill the process here; keep a single shared encoder for all clients.
+        pass
+
+@app.route('/audio')
+def audio():
+    """
+    HTTP endpoint that serves a continuous Ogg/Opus stream from the configured ALSA input device.
+    """
+    alsa_in = AUDIO_CONFIG.get("audio_in", {}).get("alsa_device")
+    proc = start_ffmpeg_rx_stream(alsa_in)
+    if not proc:
+        return Response("Audio not available\n", status=503, mimetype="text/plain")
+    return Response(
+        stream_with_context(stream_audio_generator()),
+        mimetype="audio/ogg"
+    )
 
 if __name__ == '__main__':
     # Start background updater thread
