@@ -171,21 +171,11 @@ function handleDigitInteraction(digitEl, eventData) {
   let newFrequency = currentFrequencyHz;
 
   if (isUpperHalf) {
-    // Increment digit
-    if (currentDigit < 9) {
-      newFrequency += digitValue;
-    } else {
-      // Roll over: remove 9, add 0 (net effect: subtract 9 * digitValue)
-      newFrequency -= 9 * digitValue;
-    }
+    // Increment digit - proper carry logic
+    newFrequency += digitValue;
   } else {
-    // Decrement digit
-    if (currentDigit > 0) {
-      newFrequency -= digitValue;
-    } else {
-      // Roll under: remove 0, add 9 (net effect: add 9 * digitValue)
-      newFrequency += 9 * digitValue;
-    }
+    // Decrement digit - proper borrow logic
+    newFrequency -= digitValue;
   }
 
   console.log(`*** SENDING FREQUENCY CHANGE ***`);
@@ -195,7 +185,11 @@ function handleDigitInteraction(digitEl, eventData) {
   if (newFrequency < 1000000) newFrequency = 1000000; // 1 MHz minimum
   if (newFrequency > 60000000) newFrequency = 60000000; // 60 MHz maximum
 
-  // Send frequency change to server
+  // IMMEDIATE local update for responsive UX
+  currentFrequencyHz = newFrequency;
+  updateLocalFrequencyDisplay(newFrequency);
+
+  // Send to server in background
   sendFrequencyChange(newFrequency);
 
   // Visual feedback
@@ -203,6 +197,39 @@ function handleDigitInteraction(digitEl, eventData) {
   setTimeout(() => {
     digitEl.classList.remove('active');
   }, 150);
+}
+
+function updateLocalFrequencyDisplay(frequencyHz) {
+  // Convert Hz to kHz and update display immediately
+  const freqKHz = frequencyHz / 1e3;
+  const freqStr = freqKHz.toFixed(2);
+  const parts = freqStr.split('.');
+  let integerPart = parts[0];
+  const decimalPart = parts[1];
+
+  integerPart = integerPart.replace(/^0+/, '') || '0';
+
+  let html = '';
+  const numDigits = integerPart.length;
+
+  // Integer part
+  for (let i = 0; i < integerPart.length; i++) {
+    const digit = integerPart[i];
+    const digitPower = numDigits - 1 - i;
+    const digitValue = Math.pow(10, digitPower + 3);
+    html += `<span class="digit clickable-digit" data-value="${digitValue}" data-digit="${digit}">${digit}</span>`;
+  }
+
+  html += '<span class="digit">.</span>';
+
+  // Decimal part
+  for (let i = 0; i < decimalPart.length; i++) {
+    const digit = decimalPart[i];
+    const digitValue = Math.pow(10, 2 - i - 1) * 10;
+    html += `<span class="digit clickable-digit" data-value="${digitValue}" data-digit="${digit}">${digit}</span>`;
+  }
+
+  frequencyA.innerHTML = html;
 }
 
 function sendFrequencyChange(frequencyHz) {
