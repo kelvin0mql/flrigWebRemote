@@ -25,10 +25,16 @@ const rxAudioEl = document.getElementById('rx-audio');
 const connectAudioBtn = document.getElementById('connect-audio');
 const disconnectAudioBtn = document.getElementById('disconnect-audio');
 
+// Frequency limits (Hz)
+const MIN_FREQ_HZ = 30000;      // 30 kHz: typical HF rig lower limit
+const MAX_FREQ_HZ = 56000000;   // 56 MHz: your rig's upper limit
+
 // Current frequency for digit manipulation
-let currentFrequencyHz = 0;
+let currentFrequencyHz = MIN_FREQ_HZ;
 let pttActive = false;
 let tuneActive = false;
+// Remember if RX audio was connected before PTT
+let wasListeningBeforePTT = false
 
 // WebRTC state
 let pc = null;
@@ -380,6 +386,9 @@ pttBtn.addEventListener('click', function() {
 });
 
 function togglePTT() {
+  // remember if RX audio was connected before toggling
+  wasListeningBeforePTT = isListening();
+
   pttActive = !pttActive;
 
   if (pttActive) {
@@ -396,6 +405,13 @@ function togglePTT() {
     pttBtn.style.backgroundColor = '#28a745';
     pttBtn.style.color = 'white';
     socket.emit('ptt_control', { action: 'off' });
+
+    // if we were listening before TX, reconnect RX audio now
+    if (wasListeningBeforePTT && !webrtcConnected) {
+      startWebRTC();
+    }
+    wasListeningBeforePTT = false;
+
     updateListenButtons();
   }
 }
