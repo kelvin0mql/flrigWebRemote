@@ -854,6 +854,48 @@ def handle_tune_control(data):
     success, message = flrig_remote.tune_control(data['action'])
     emit('tune_response', {'success': success, 'error': message if not success else None})
 
+# Debug helper: list flrig methods containing a substring (prints once)
+      _BAND_METHODS_LOGGED = False
+      def _log_flrig_methods_once(substr: str = "band"):
+          global _BAND_METHODS_LOGGED
+          if _BAND_METHODS_LOGGED:
+              return
+          try:
+              methods = flrig_remote.client.system.listMethods()
+              hits = [m for m in methods if substr.lower() in m.lower()]
+              print(f"[flrig] methods containing '{substr}':")
+              for m in sorted(hits):
+                  print("   ", m)
+              if not hits:
+                  # If nothing matched, still print a short sample to guide us
+                  print("[flrig] No methods matched. First 20 methods:")
+                  for m in methods[:20]:
+                      print("   ", m)
+          except Exception as e:
+              print(f"[flrig] method introspection failed: {e}")
+          _BAND_METHODS_LOGGED = True
+
+# Debug helper: list flrig methods containing a substring (prints once)
+_BAND_METHODS_LOGGED = False
+def _log_flrig_methods_once(substr: str = "band"):
+    global _BAND_METHODS_LOGGED
+    if _BAND_METHODS_LOGGED:
+        return
+    try:
+        methods = flrig_remote.client.system.listMethods()
+        hits = [m for m in methods if substr.lower() in m.lower()]
+        print(f"[flrig] methods containing '{substr}':")
+        for m in sorted(hits):
+            print("   ", m)
+        if not hits:
+            # If nothing matched, still print a short sample to guide us
+            print("[flrig] No methods matched. First 20 methods:")
+            for m in methods[:20]:
+                print("   ", m)
+    except Exception as e:
+        print(f"[flrig] method introspection failed: {e}")
+    _BAND_METHODS_LOGGED = True
+
 @socketio.on('band_select')
 def handle_band_select(data):
     """
@@ -869,21 +911,23 @@ def handle_band_select(data):
     err = None
     try:
         try:
-            # Most flrig setups accept string form (e.g., "3.5", "14", "GEN")
+            # Try common name with string argument (e.g., "3.5", "14", "GEN")
             flrig_remote.client.rig.set_band(band)
             ok = True
         except Exception as e1:
             try:
-                # Some expect numeric MHz (e.g., 3.5, 14)
+                # Try common name with numeric MHz (e.g., 3.5, 14)
                 flrig_remote.client.rig.set_band(float(band))
                 ok = True
             except Exception as e2:
                 try:
-                    # Fallback alternative naming seen on some rigs
+                    # Alternate naming seen on some rigs
                     flrig_remote.client.rig.band(band)
                     ok = True
                 except Exception as e3:
                     err = f"{e1}; {e2}; {e3}"
+                    # Print available 'band'-related methods once so we can wire the correct one
+                    _log_flrig_methods_once("band")
     except Exception as e:
         err = str(e)
 
