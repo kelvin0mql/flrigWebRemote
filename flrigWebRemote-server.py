@@ -445,11 +445,8 @@ class AvAlsaTrack(MediaStreamTrack):
 
     def __init__(self, alsa_device: str):
         super().__init__()
-        # Prefer 'hw:' to avoid plug layer unless needed
-        if alsa_device.startswith("plughw:"):
-            self._device = "hw:" + alsa_device.split(":", 1)[1]
-        else:
-            self._device = alsa_device
+        # Use provided device as-is (plughw: is okay; often more tolerant than hw:)
+        self._device = alsa_device
 
         self.sample_rate = 48000
         self.channels = 1
@@ -458,14 +455,14 @@ class AvAlsaTrack(MediaStreamTrack):
         self._pts = 0
         self._closed = False
 
-        # Open ALSA input via PyAV. Let device run native; resampler will convert to 48k.
+        # Open ALSA input via PyAV. Let device run native; resampler converts to 48k.
         self._container = av.open(
             file=self._device,
             format="alsa",
             mode="r",
             options={
                 "ac": "1",
-                "thread_queue_size": "1024",
+                "thread_queue_size": "2048",
             },
         )
         self._in_stream = next(s for s in self._container.streams if s.type == "audio")
@@ -476,22 +473,25 @@ class AvAlsaTrack(MediaStreamTrack):
         self._pending = b""
 
     async def recv(self) -> av.AudioFrame:
-        # Accumulate until we have exactly one 20 ms frame (960 samples @ 48 kHz, mono s16 = 1920 bytes)
-        bytes_needed = self.samples_per_frame * 2
-        while len(self._pending) < bytes_needed:
+        # Prebuffer a few frames to reduce capture starvation (xruns)
+        bytes_per_frame = self.samples_per_frame * 2  # s16 mono
+        target_buffer = bytes_per_frame * 3
+
+        while len(self._pending) < target_buffer:
             if self._closed:
                 return self._silence_frame()
             frame = await asyncio.get_event_loop().run_in_executor(None, self._read_one_frame)
             if frame is None:
-                # EOF/transient: keep clocking with silence
                 return self._silence_frame()
             for out in self._resampler.resample(frame):
-                buf = out.planes[0].to_bytes()
+                # NOTE: to_bytes() is deprecated; using bytes(plane) avoids the warning
+                buf = bytes(out.planes[0])
                 if buf:
                     self._pending += buf
 
-        chunk = self._pending[:bytes_needed]
-        self._pending = self._pending[bytes_needed:]
+        # Emit exactly one 20 ms frame
+        chunk = self._pending[:bytes_per_frame]
+        self._pending = self._pending[bytes_per_frame:]
 
         out_frame = av.AudioFrame(format="s16", layout="mono", samples=self.samples_per_frame)
         out_frame.planes[0].update(chunk)
@@ -519,7 +519,8 @@ class AvAlsaTrack(MediaStreamTrack):
         self._pts += self.samples_per_frame
         return frame
 
-    async def stop(self) -> None:
+    # IMPORTANT: stop must be synchronous; aiortc calls it without awaiting
+    def stop(self) -> None:
         if self._closed:
             return
         self._closed = True
@@ -529,7 +530,11 @@ class AvAlsaTrack(MediaStreamTrack):
             except Exception:
                 pass
         finally:
-            await super().stop()
+            # call base class stop() synchronously
+            try:
+                super().stop()
+            except Exception:
+                pass
 
 # Helpers for PeerConnection lifecycle and ICE
 
@@ -543,7 +548,10 @@ async def _cleanup_pc(pc: RTCPeerConnection):
             try:
                 track = sender.track
                 if track and hasattr(track, "stop"):
-                    await track.stop()
+                    res = track.stop()
+                    # If some track returns an awaitable, await it; else ignore
+                    if asyncio.iscoroutine(res):
+                        await res
             except Exception:
                 pass
         # Backward compat: stop any old MediaPlayer if ever present
