@@ -817,7 +817,6 @@ async def _handle_webrtc_offer(offer: RTCSessionDescription):
     }
 
 # -------------------- Flask routes --------------------
-
 @app.route('/')
 def index():
     """Main page."""
@@ -854,27 +853,6 @@ def handle_tune_control(data):
     success, message = flrig_remote.tune_control(data['action'])
     emit('tune_response', {'success': success, 'error': message if not success else None})
 
-# Debug helper: list flrig methods containing a substring (prints once)
-_BAND_METHODS_LOGGED = False
-def _log_flrig_methods_once(substr: str = "band"):
-    global _BAND_METHODS_LOGGED
-    if _BAND_METHODS_LOGGED:
-        return
-    try:
-        methods = flrig_remote.client.system.listMethods()
-        hits = [m for m in methods if substr.lower() in m.lower()]
-        print(f"[flrig] methods containing '{substr}':")
-        for m in sorted(hits):
-            print("   ", m)
-        if not hits:
-            # If nothing matched, still print a short sample to guide us
-            print("[flrig] No methods matched. First 20 methods:")
-            for m in methods[:20]:
-                print("   ", m)
-    except Exception as e:
-        print(f"[flrig] method introspection failed: {e}")
-    _BAND_METHODS_LOGGED = True
-
 @socketio.on('band_select')
 def handle_band_select(data):
     """
@@ -894,7 +872,7 @@ def handle_band_select(data):
         "3.5":   {"freq": 3900000,   "mode": "LSB"},
         "7":     {"freq": 7237500,   "mode": "LSB"},
         # "10":  {"freq": 10136000,  "mode": "USB"},  # skipped (no phone)
-        "14":    {"freq": 14287500,  "mode": "USB"},
+        "14":    {"freq": 14300000,  "mode": "USB"},
         "18":    {"freq": 18139000,  "mode": "USB"},
         "21":    {"freq": 21362500,  "mode": "USB"},
         "24":    {"freq": 24960000,  "mode": "USB"},
@@ -942,12 +920,11 @@ def handle_user_button(data):
         emit('user_button_ack', {'success': False, 'error': 'Invalid cmd'})
         return
 
-    if not (1 <= cmd <= 32):  # flrig often supports a broader range; allow up to 32 just in case
+    if not (1 <= cmd <= 32):  # allow a broader range just in case
         emit('user_button_ack', {'success': False, 'error': f'cmd out of range: {cmd}'})
         return
 
     try:
-        # fire-and-forget call into flrig
         flrig_remote.client.rig.cmd(cmd)
         emit('user_button_ack', {'success': True, 'cmd': cmd})
     except Exception as e:

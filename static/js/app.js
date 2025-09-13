@@ -470,6 +470,15 @@ socket.on('band_selected', function(data) {
   }
 });
 
+// Acknowledgement for Extras (A) user buttons (cmd 1..8)
+socket.on('user_button_ack', function(data) {
+  if (data && data.success) {
+    console.log(`[extrasA] ran user cmd ${data.cmd}`);
+  } else {
+    console.warn('[extrasA] cmd failed:', data && data.error);
+  }
+});
+
 socket.on('ptt_response', function(data) {
   if (!data.success) {
     console.error('PTT command failed:', data.error);
