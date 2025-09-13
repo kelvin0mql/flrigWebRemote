@@ -854,6 +854,45 @@ def handle_tune_control(data):
     success, message = flrig_remote.tune_control(data['action'])
     emit('tune_response', {'success': success, 'error': message if not success else None})
 
+@socketio.on('band_select')
+def handle_band_select(data):
+    """
+    Switch to the selected band and let the rig recall last-used freq/mode.
+    No forced frequency here.
+    """
+    band = str(data.get('band', '')).strip()
+    if not band:
+        emit('band_selected', {'success': False, 'error': 'Missing band'})
+        return
+
+    ok = False
+    err = None
+    try:
+        try:
+            # Most flrig setups accept string form (e.g., "3.5", "14", "GEN")
+            flrig_remote.client.rig.set_band(band)
+            ok = True
+        except Exception as e1:
+            try:
+                # Some expect numeric MHz (e.g., 3.5, 14)
+                flrig_remote.client.rig.set_band(float(band))
+                ok = True
+            except Exception as e2:
+                try:
+                    # Fallback alternative naming seen on some rigs
+                    flrig_remote.client.rig.band(band)
+                    ok = True
+                except Exception as e3:
+                    err = f"{e1}; {e2}; {e3}"
+    except Exception as e:
+        err = str(e)
+
+    emit('band_selected', {
+        'success': ok,
+        'error': None if ok else (err or 'Band change failed'),
+        'band': band
+    })
+
 @socketio.on('frequency_change')
 def handle_frequency_change(data):
     freq_hz = data.get('frequency')

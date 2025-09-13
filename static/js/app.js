@@ -34,7 +34,7 @@ let currentFrequencyHz = MIN_FREQ_HZ;
 let pttActive = false;
 let tuneActive = false;
 // Remember if RX audio was connected before PTT
-let wasListeningBeforePTT = false
+let wasListeningBeforePTT = false;
 
 // WebRTC state
 let pc = null;
