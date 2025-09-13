@@ -186,6 +186,22 @@ socket.on('disconnect', function() {
   connectionStatus.className = 'badge bg-danger';
 });
 
+function formatBandwidth(raw) {
+  // If it’s already a simple string/number, return trimmed
+  if (raw == null) return 'Unknown';
+  if (Array.isArray(raw)) {
+    const first = raw.find(x => String(x).trim() !== '');
+    return (first != null) ? String(first).trim() : 'Unknown';
+  }
+  const s = String(raw).trim();
+
+  // If it looks like "['1800', '']" or "('1800', '')", strip brackets/quotes and split
+  const stripped = s.replace(/^[\[\(]\s*|[\]\)]\s*$/g, '').replace(/['"]/g, '');
+  // Now split by comma and pick the first non-empty token
+  const token = stripped.split(',').map(t => t.trim()).find(t => t.length > 0);
+  return token || s;
+}
+
 function updateDisplay(data) {
   // Connection status
   if (data.connected) {
@@ -199,12 +215,12 @@ function updateDisplay(data) {
   // Last update
   lastUpdate.textContent = `Last update: ${data.last_update}`;
 
-  // Frequency (clickable digits)
+  // Frequency
   updateClickableFrequency(data.frequency_a);
 
   // Mode / Bandwidth
   currentMode.textContent = data.mode;
-  currentBandwidth.textContent = data.bandwidth;
+  currentBandwidth.textContent = formatBandwidth(data.bandwidth);
 
   // Sliders in UI: Mic, RF
   micValue.textContent = data.mic_gain;

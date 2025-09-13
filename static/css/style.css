@@ -203,7 +203,6 @@ body {
     padding: 10px;
     text-align: center;
 }
-
 .metric-label {
     font-size: 0.85rem;
     color: #6c757d;
@@ -211,7 +210,6 @@ body {
     text-transform: uppercase;
     letter-spacing: 0.05em;
 }
-
 .metric-value {
     font-size: 1.3rem;
     font-weight: 700;
@@ -222,3 +220,30 @@ body {
 .metric-value.swr-ok { color: #28a745; }
 .metric-value.swr-warn { color: #ffc107; }
 .metric-value.swr-bad { color: #dc3545; }
+
+/* Force the four metrics into one row on narrow screens */
+@media (max-width: 575.98px) {
+    .metrics-row > [class^="col-"],
+    .metrics-row > [class*=" col-"] {
+        flex: 0 0 25%;
+        max-width: 25%;
+        padding-left: 6px;
+        padding-right: 6px;
+    }
+    .metrics-row .control-group {
+        padding: 8px;
+        margin-bottom: 6px;
+    }
+    .metric {
+        padding: 8px;
+        border-radius: 4px;
+    }
+    .metric-label {
+        font-size: 0.7rem;
+        margin-bottom: 2px;
+    }
+    .metric-value {
+        font-size: 1.05rem;
+        font-weight: 700;
+    }
+}
