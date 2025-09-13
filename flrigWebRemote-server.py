@@ -512,20 +512,18 @@ async def _create_pc_with_rig_rx():
             pcs.discard(pc)
             await _cleanup_pc(pc)
 
-    # Add rig RX track (ALSA capture via ffmpeg/MediaPlayer)
+# Add rig RX track (ALSA capture via ffmpeg/MediaPlayer)
     alsa_in = _alsa_input_device()
     if not alsa_in:
         print("No ALSA input configured; cannot provide WebRTC audio.")
     else:
-        # Capture mono at 48 kHz to match WebRTC/Opus clocking and avoid pitch shifts
+        # Capture mono at device's native rate (no 'ar') to avoid pitch issues
         player = MediaPlayer(
             alsa_in,
             format="alsa",
             options={
                 "ac": "1",
-                "ar": "48000",
-                # Optional filtering if you want it later:
-                # "af": "highpass=f=300,lowpass=f=3000"
+                # "af": "highpass=f=300,lowpass=f=3000"  # optional
             },
         )
         if player.audio:
