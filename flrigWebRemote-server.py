@@ -8,6 +8,10 @@ import os
 import json
 import sys
 import subprocess
+import threading
+from fractions import Fraction
+import av
+from aiortc import RTCPeerConnection, RTCSessionDescription, MediaStreamTrack
 import re
 import asyncio
 import logging
@@ -426,9 +430,7 @@ flrig_remote = FlrigWebRemote()
 
 # --- WebRTC (aiortc) state and helpers ---
 pcs = set()
-_pc_players = {}
-
-# Single, long-lived asyncio loop for all aiortc work
+_pc_players = {}  # kept for compatibility; not used by custom track
 _aiortc_loop = asyncio.new_event_loop()
 def _run_loop(loop):
     asyncio.set_event_loop(loop)
@@ -436,15 +438,114 @@ def _run_loop(loop):
 _loop_thread = threading.Thread(target=_run_loop, args=(_aiortc_loop,), daemon=True)
 _loop_thread.start()
 
+class AlsaPcmTrack(MediaStreamTrack):
+    """
+    Capture mono PCM from ALSA via arecord and deliver 20 ms (960-sample) frames at 48 kHz.
+    """
+    kind = "audio"
+
+    def __init__(self, alsa_device: str):
+        super().__init__()
+        # Prefer 'hw:' to avoid plug resampling if possible
+        if alsa_device.startswith("plughw:"):
+            dev = "hw:" + alsa_device.split(":", 1)[1]
+        else:
+            dev = alsa_device
+
+        self.sample_rate = 48000
+        self.channels = 1
+        self.samples_per_frame = 960  # 20 ms @ 48k
+        self.bytes_per_sample = 2  # s16le
+        self.frame_bytes = self.samples_per_frame * self.channels * self.bytes_per_sample
+
+        # arecord with explicit buffer/period to avoid xruns (200 ms buffer, 20 ms period)
+        cmd = [
+            "arecord",
+            "-D", dev,
+            "-f", "S16_LE",
+            "-c", "1",
+            "-r", str(self.sample_rate),
+            "-t", "raw",
+            "-q",
+            "-B", "200000",
+            "-F", "20000",
+            "-"
+        ]
+        self._proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0)
+        self._buffer = bytearray()
+        self._pts = 0
+        self._time_base = Fraction(1, self.sample_rate)
+        self._closed = False
+
+    async def recv(self) -> av.AudioFrame:
+        while len(self._buffer) < self.frame_bytes:
+            if self._closed:
+                # Return silence frame if closed while awaiting data
+                return self._silence_frame()
+            chunk = await asyncio.get_event_loop().run_in_executor(None, self._read_chunk)
+            if not chunk:
+                # EOF: return silence frame to keep pipeline alive briefly
+                return self._silence_frame()
+            self._buffer.extend(chunk)
+
+        data = self._buffer[:self.frame_bytes]
+        del self._buffer[:self.frame_bytes]
+
+        frame = av.AudioFrame(format="s16", layout="mono", samples=self.samples_per_frame)
+        frame.planes[0].update(bytes(data))
+        frame.sample_rate = self.sample_rate
+        frame.time_base = self._time_base
+        frame.pts = self._pts
+        self._pts += self.samples_per_frame
+        return frame
+
+    def _read_chunk(self) -> bytes:
+        try:
+            return self._proc.stdout.read(self.frame_bytes)
+        except Exception:
+            return b""
+
+    def _silence_frame(self) -> av.AudioFrame:
+        frame = av.AudioFrame(format="s16", layout="mono", samples=self.samples_per_frame)
+        frame.planes[0].update(b"\x00" * self.frame_bytes)
+        frame.sample_rate = self.sample_rate
+        frame.time_base = self._time_base
+        frame.pts = self._pts
+        self._pts += self.samples_per_frame
+        return frame
+
+    async def stop(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            if self._proc and self._proc.poll() is None:
+                try:
+                    self._proc.terminate()
+                except Exception:
+                    pass
+                try:
+                    await asyncio.get_event_loop().run_in_executor(None, self._proc.wait, 1)
+                except Exception:
+                    pass
+        finally:
+            await super().stop()
+
 def _alsa_input_device():
     """Return ALSA input device string like 'plughw:X,Y' or None."""
     return AUDIO_CONFIG.get("audio_in", {}).get("alsa_device")
 
 async def _cleanup_pc(pc: RTCPeerConnection):
-    """
-    Close a PeerConnection and stop any associated MediaPlayer to free ALSA.
-    """
     try:
+        # Stop custom track if present
+        for sender in pc.getSenders():
+            try:
+                track = sender.track
+                if track and hasattr(track, "stop"):
+                    await track.stop()
+            except Exception:
+                pass
+        # Backward compat stopping of MediaPlayer if ever used
         player = _pc_players.pop(pc, None)
         if player:
             try:
@@ -462,44 +563,11 @@ async def _cleanup_pc(pc: RTCPeerConnection):
     except Exception:
         pass
 
-async def _close_all_pcs():
-    """
-    Close all existing PC sessions to guarantee ALSA is not held open.
-    """
-    to_close = list(pcs)
-    for p in to_close:
-        try:
-            pcs.discard(p)
-            await _cleanup_pc(p)
-        except Exception:
-            pass
-
-async def _wait_for_ice_complete(pc: RTCPeerConnection, timeout: float = 5.0):
-    """
-    Wait for ICE gathering to complete so the SDP answer includes candidates (non-trickle).
-    """
-    if pc.iceGatheringState == "complete":
-        return
-    done = asyncio.Event()
-    @pc.on("icegatheringstatechange")
-    def _on_ice_state_change():
-        if pc.iceGatheringState == "complete":
-            try:
-                done.set()
-            except Exception:
-                pass
-    try:
-        await asyncio.wait_for(done.wait(), timeout=timeout)
-    except asyncio.TimeoutError:
-        # Proceed anyway; host candidates may be enough on LAN
-        pass
-
 async def _create_pc_with_rig_rx():
     """
     Create a PeerConnection that sends rig RX audio (from ALSA) to the client.
     Only one active PC is allowed at a time to avoid ALSA 'busy' errors.
     """
-    # Ensure single active session
     await _close_all_pcs()
 
     pc = RTCPeerConnection()
@@ -512,28 +580,13 @@ async def _create_pc_with_rig_rx():
             pcs.discard(pc)
             await _cleanup_pc(pc)
 
-# Add rig RX track (ALSA capture via ffmpeg/MediaPlayer)
     alsa_in = _alsa_input_device()
     if not alsa_in:
         print("No ALSA input configured; cannot provide WebRTC audio.")
     else:
-        # Force 48 kHz mono, s16, and 20 ms frames (960 samples) for Opus/WebRTC
-        player = MediaPlayer(
-            alsa_in,
-            format="alsa",
-            options={
-                "ac": "1",
-                "ar": "48000",
-                "sample_fmt": "s16",
-                # Resample with high quality and normalize frame size to 960 samples
-                "af": "aresample=48000:resampler=soxr,asetnsamples=n=960:p=0",
-            },
-        )
-        if player.audio:
-            pc.addTrack(player.audio)
-            _pc_players[pc] = player
-        else:
-            print("Failed to create audio track from ALSA input.")
+        # Use custom arecord-backed track to avoid dropouts/pitch issues
+        track = AlsaPcmTrack(alsa_in)
+        pc.addTrack(track)
 
     return pc
 
