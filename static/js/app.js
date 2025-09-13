@@ -481,6 +481,7 @@ socket.on('ptt_response', function(data) {
 document.addEventListener('DOMContentLoaded', function() {
   updateListenButtons();
   wireBandButtons();
+  wireExtrasA();
   // Initialize PTT button to RX state (green)
   pttBtn.className = 'btn btn-success';
   pttBtn.style.backgroundColor = '#28a745';

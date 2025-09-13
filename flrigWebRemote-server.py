@@ -930,6 +930,29 @@ def handle_band_select(data):
     except Exception as e:
         emit('band_selected', {'success': False, 'error': str(e), 'band': band})
 
+@socketio.on('user_button')
+def handle_user_button(data):
+    """
+    Invoke flrig user 'cmd' button (integer 1..8).
+    Example: 1=Ant1, 2=Ant2, 3=DNR On, 4=DNR Off, 5=5W, 6=15W, 7=30W, 8=60W.
+    """
+    try:
+        cmd = int(data.get('cmd', 0))
+    except Exception:
+        emit('user_button_ack', {'success': False, 'error': 'Invalid cmd'})
+        return
+
+    if not (1 <= cmd <= 32):  # flrig often supports a broader range; allow up to 32 just in case
+        emit('user_button_ack', {'success': False, 'error': f'cmd out of range: {cmd}'})
+        return
+
+    try:
+        # fire-and-forget call into flrig
+        flrig_remote.client.rig.cmd(cmd)
+        emit('user_button_ack', {'success': True, 'cmd': cmd})
+    except Exception as e:
+        emit('user_button_ack', {'success': False, 'error': str(e), 'cmd': cmd})
+
 @socketio.on('frequency_change')
 def handle_frequency_change(data):
     freq_hz = data.get('frequency')
