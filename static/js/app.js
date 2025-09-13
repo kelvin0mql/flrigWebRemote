@@ -58,6 +58,17 @@ function stopLiveAudioStream() {
   updateListenButtons();
 }
 
+// Wire Band buttons (click => emit band_select)
+function wireBandButtons() {
+  document.querySelectorAll('.band-buttons .band-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const band = btn.getAttribute('data-band');
+      if (!band) return;
+      socket.emit('band_select', { band });
+    });
+  });
+}
+
 function attachAudioDebug() {
   if (!rxAudioEl || rxAudioEl._dbgAttached) return;
   rxAudioEl._dbgAttached = true;
@@ -186,18 +197,15 @@ socket.on('disconnect', function() {
   connectionStatus.className = 'badge bg-danger';
 });
 
+// Normalize bandwidth display (strip brackets/quotes/commas)
 function formatBandwidth(raw) {
-  // If it’s already a simple string/number, return trimmed
   if (raw == null) return 'Unknown';
   if (Array.isArray(raw)) {
     const first = raw.find(x => String(x).trim() !== '');
     return (first != null) ? String(first).trim() : 'Unknown';
   }
   const s = String(raw).trim();
-
-  // If it looks like "['1800', '']" or "('1800', '')", strip brackets/quotes and split
   const stripped = s.replace(/^[\[\(]\s*|[\]\)]\s*$/g, '').replace(/['"]/g, '');
-  // Now split by comma and pick the first non-empty token
   const token = stripped.split(',').map(t => t.trim()).find(t => t.length > 0);
   return token || s;
 }
@@ -215,14 +223,14 @@ function updateDisplay(data) {
   // Last update
   lastUpdate.textContent = `Last update: ${data.last_update}`;
 
-  // Frequency
+  // Frequency (clickable digits)
   updateClickableFrequency(data.frequency_a);
 
   // Mode / Bandwidth
   currentMode.textContent = data.mode;
   currentBandwidth.textContent = formatBandwidth(data.bandwidth);
 
-  // Sliders in UI: Mic, RF
+  // Sliders present in UI: Mic, RF
   micValue.textContent = data.mic_gain;
   micSlider.value = data.mic_gain;
 
@@ -402,9 +410,6 @@ function deactivatePTT() {
   updateListenButtons();
 }
 
-// Initialize buttons state on load
-document.addEventListener('DOMContentLoaded', updateListenButtons);
-
 // Handle server responses
 socket.on('frequency_changed', function(data) {
   if (data.success) {
@@ -422,11 +427,29 @@ socket.on('tune_response', function(data) {
   }
 });
 
+socket.on('band_selected', function(data) {
+  if (data && data.success) {
+    console.log('[band] tuned to', data.band, '=>', data.frequency_hz, 'Hz');
+  } else {
+    console.warn('[band] tune failed:', data && data.error);
+  }
+});
+
 socket.on('ptt_response', function(data) {
   if (!data.success) {
     console.error('PTT command failed:', data.error);
     deactivatePTT();
   }
+});
+
+// DOM ready initialization (single place)
+document.addEventListener('DOMContentLoaded', function() {
+  updateListenButtons();
+  wireBandButtons();
+  // Initialize PTT button to RX state (green)
+  pttBtn.className = 'btn btn-success';
+  pttBtn.style.backgroundColor = '#28a745';
+  pttBtn.style.color = 'white';
 });
 
 // Initial load - fetch current status
