@@ -436,18 +436,15 @@ def _run_loop(loop):
 _loop_thread = threading.Thread(target=_run_loop, args=(_aiortc_loop,), daemon=True)
 _loop_thread.start()
 
-class AvAlsaTrack(MediaStreamTrack):
+class FfmpegPcmTrack(MediaStreamTrack):
     """
-    Capture from ALSA via PyAV/FFmpeg, resample to 48 kHz mono s16,
-    and deliver exact 20 ms (960-sample) frames with correct PTS.
+    Capture from ALSA via ffmpeg, resample to 48 kHz mono s16, and emit exact
+    20 ms (960-sample) frames with correct timestamps.
     """
     kind = "audio"
 
     def __init__(self, alsa_device: str):
         super().__init__()
-        # Use the configured ALSA device as-is (plughw:... is fine)
-        self._device = alsa_device
-
         self.sample_rate = 48000
         self.channels = 1
         self.samples_per_frame = 960  # 20 ms @ 48 kHz
@@ -455,83 +452,95 @@ class AvAlsaTrack(MediaStreamTrack):
         self._pts = 0
         self._closed = False
 
-        # Force ALSA to 48 kHz mono at the device layer; increase queue for robustness
-        self._container = av.open(
-            file=self._device,
-            format="alsa",
-            mode="r",
-            options={
-                "ac": "1",
-                "ar": "48000",
-                "thread_queue_size": "4096",
-            },
+        # Build ffmpeg command:
+        # -f alsa -ac 1 -ar 48000 -i <device> : open ALSA at 48k mono
+        # -af asetnsamples=n=960:p=0,aresample=48000:resampler=soxr : normalize frames and ensure 48k
+        # -f s16le - : raw PCM to stdout
+        self._cmd = [
+            "ffmpeg",
+            "-hide_banner", "-loglevel", "warning",
+            "-f", "alsa",
+            "-ac", "1",
+            "-ar", "48000",
+            "-i", alsa_device,
+            "-af", "asetnsamples=n=960:p=0,aresample=48000:resampler=soxr",
+            "-f", "s16le",
+            "-"
+        ]
+        # Start ffmpeg
+        self._proc = subprocess.Popen(
+            self._cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            bufsize=0,
         )
-        self._in_stream = next(s for s in self._container.streams if s.type == "audio")
-        # Resample to 48 kHz mono s16 (no-op if already 48k, but keeps timing sane)
-        self._resampler = AudioResampler(format="s16", layout="mono", rate=self.sample_rate)
 
-        self._pending = b""
+        self._frame_bytes = self.samples_per_frame * self.channels * 2  # s16 mono
+        self._buffer = bytearray()
 
     async def recv(self) -> av.AudioFrame:
-        # Prebuffer 4 frames to reduce capture starvation and stabilize rate
-        bytes_per_frame = self.samples_per_frame * 2  # s16 mono
-        target_buffer = bytes_per_frame * 4
-
-        while len(self._pending) < target_buffer:
+        # Read exactly one frame worth of bytes (blocking in thread pool)
+        while len(self._buffer) < self._frame_bytes:
             if self._closed:
                 return self._silence_frame()
-            frame = await asyncio.get_event_loop().run_in_executor(None, self._read_one_frame)
-            if frame is None:
-                # ALSA hiccup: keep clocking with silence for 20 ms
+            chunk = await asyncio.get_event_loop().run_in_executor(None, self._read_exact, self._frame_bytes - len(self._buffer))
+            if not chunk:
                 return self._silence_frame()
-            for out in self._resampler.resample(frame):
-                # Use bytes(plane) to avoid deprecated to_bytes()
-                buf = bytes(out.planes[0])
-                if buf:
-                    self._pending += buf
+            self._buffer.extend(chunk)
 
-        # Emit exactly one 20 ms frame
-        chunk = self._pending[:bytes_per_frame]
-        self._pending = self._pending[bytes_per_frame:]
+        data = bytes(self._buffer[:self._frame_bytes])
+        del self._buffer[:self._frame_bytes]
 
-        out_frame = av.AudioFrame(format="s16", layout="mono", samples=self.samples_per_frame)
-        out_frame.planes[0].update(chunk)
-        out_frame.sample_rate = self.sample_rate
-        out_frame.time_base = self._time_base
-        out_frame.pts = self._pts
-        self._pts += self.samples_per_frame
-        return out_frame
-
-    def _read_one_frame(self):
-        try:
-            for packet in self._container.demux(self._in_stream):
-                for frame in packet.decode():
-                    return frame
-        except Exception:
-            return None
-        return None
-
-    def _silence_frame(self) -> av.AudioFrame:
         frame = av.AudioFrame(format="s16", layout="mono", samples=self.samples_per_frame)
-        frame.planes[0].update(b"\x00" * (self.samples_per_frame * 2))
+        frame.planes[0].update(data)
         frame.sample_rate = self.sample_rate
         frame.time_base = self._time_base
         frame.pts = self._pts
         self._pts += self.samples_per_frame
         return frame
 
-    # IMPORTANT: stop must be synchronous; aiortc calls it without awaiting
+    def _read_exact(self, n: int) -> bytes:
+        try:
+            return self._proc.stdout.read(n)
+        except Exception:
+            return b""
+
+    def _silence_frame(self) -> av.AudioFrame:
+        frame = av.AudioFrame(format="s16", layout="mono", samples=self.samples_per_frame)
+        frame.planes[0].update(b"\x00" * self._frame_bytes)
+        frame.sample_rate = self.sample_rate
+        frame.time_base = self._time_base
+        frame.pts = self._pts
+        self._pts += self.samples_per_frame
+        return frame
+
+    # Synchronous stop, as aiortc calls stop() without awaiting
     def stop(self) -> None:
         if self._closed:
             return
         self._closed = True
         try:
-            try:
-                self._container.close()
-            except Exception:
-                pass
+            if self._proc and self._proc.poll() is None:
+                try:
+                    self._proc.terminate()
+                except Exception:
+                    pass
+                try:
+                    self._proc.wait(timeout=1)
+                except Exception:
+                    pass
+            if self._proc:
+                try:
+                    if self._proc.stdout:
+                        self._proc.stdout.close()
+                except Exception:
+                    pass
+                try:
+                    if self._proc.stderr:
+                        self._proc.stderr.close()
+                except Exception:
+                    pass
         finally:
-            # call base class stop() synchronously
             try:
                 super().stop()
             except Exception:
@@ -620,7 +629,8 @@ async def _create_pc_with_rig_rx():
     if not alsa_in:
         print("No ALSA input configured; cannot provide WebRTC audio.")
     else:
-        track = AvAlsaTrack(alsa_in)
+        # Use ffmpeg-backed track for stable, framed PCM at 48 kHz
+        track = FfmpegPcmTrack(alsa_in)
         pc.addTrack(track)
 
     return pc
