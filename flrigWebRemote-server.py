@@ -15,7 +15,7 @@ from fractions import Fraction
 
 import av
 from av.audio.resampler import AudioResampler
-
+import math
 from aiortc import RTCPeerConnection, RTCSessionDescription, MediaStreamTrack
 
 # --- Logging / debug mode ---
@@ -280,6 +280,8 @@ FORCE_RECONFIG = ("--reconfigure-audio" in sys.argv)
 # Initialize audio configuration on startup (ALSA only)
 AUDIO_CONFIG = ensure_audio_config(force_reconfigure=FORCE_RECONFIG)
 
+# Optional: set USE_TONE=1 in the environment to send a 1 kHz test tone
+USE_TONE = (os.environ.get("USE_TONE", "0") == "1")
 
 class FlrigWebRemote:
     def __init__(self):
@@ -493,10 +495,7 @@ class FfmpegPcmTrack(MediaStreamTrack):
 
         frame = av.AudioFrame(format="s16", layout="mono", samples=self.samples_per_frame)
         frame.planes[0].update(data)
-        frame.sample_rate = self.sample_rate
-        frame.time_base = self._time_base
-        frame.pts = self._pts
-        self._pts += self.samples_per_frame
+        # IMPORTANT: let aiortc timestamp the frame
         return frame
 
     def _read_exact(self, n: int) -> bytes:
@@ -545,6 +544,50 @@ class FfmpegPcmTrack(MediaStreamTrack):
                 super().stop()
             except Exception:
                 pass
+
+class Tone1kTrack(MediaStreamTrack):
+    """
+    Generate a 1 kHz sine at 48 kHz mono, framed at exactly 20 ms (960 samples).
+    """
+    kind = "audio"
+
+    def __init__(self):
+        super().__init__()
+        self.sample_rate = 48000
+        self.samples_per_frame = 960
+        self.phase = 0.0
+        self._closed = False
+
+    async def recv(self) -> av.AudioFrame:
+        if self._closed:
+            return self._silence_frame()
+        buf = bytearray()
+        freq = 1000.0
+        two_pi_over_sr = 2.0 * math.pi / self.sample_rate
+        for _ in range(self.samples_per_frame):
+            sample = int(32767 * math.sin(self.phase))
+            buf += int(sample).to_bytes(2, byteorder="little", signed=True)
+            self.phase += two_pi_over_sr * freq
+            if self.phase >= 2.0 * math.pi:
+                self.phase -= 2.0 * math.pi
+        frame = av.AudioFrame(format="s16", layout="mono", samples=self.samples_per_frame)
+        frame.planes[0].update(bytes(buf))
+        # Let aiortc timestamp this frame (no pts/time_base set here)
+        return frame
+
+    def _silence_frame(self) -> av.AudioFrame:
+        frame = av.AudioFrame(format="s16", layout="mono", samples=self.samples_per_frame)
+        frame.planes[0].update(b"\x00" * (self.samples_per_frame * 2))
+        return frame
+
+    def stop(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            super().stop()
+        except Exception:
+            pass
 
 # Helpers for PeerConnection lifecycle and ICE
 
@@ -610,7 +653,7 @@ async def _wait_for_ice_complete(pc: RTCPeerConnection, timeout: float = 5.0):
 
 async def _create_pc_with_rig_rx():
     """
-    Create a PeerConnection that sends rig RX audio (from ALSA) to the client.
+    Create a PeerConnection that sends rig RX audio (from ALSA or synthetic tone) to the client.
     Only one active PC is allowed at a time to avoid ALSA 'busy' errors.
     """
     await _close_all_pcs()
@@ -625,11 +668,15 @@ async def _create_pc_with_rig_rx():
             pcs.discard(pc)
             await _cleanup_pc(pc)
 
+    if USE_TONE:
+        track = Tone1kTrack()
+        pc.addTrack(track)
+        return pc
+
     alsa_in = _alsa_input_device()
     if not alsa_in:
         print("No ALSA input configured; cannot provide WebRTC audio.")
     else:
-        # Use ffmpeg-backed track for stable, framed PCM at 48 kHz
         track = FfmpegPcmTrack(alsa_in)
         pc.addTrack(track)
 
