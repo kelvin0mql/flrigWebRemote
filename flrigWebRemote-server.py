@@ -517,13 +517,16 @@ async def _create_pc_with_rig_rx():
     if not alsa_in:
         print("No ALSA input configured; cannot provide WebRTC audio.")
     else:
-        # Capture mono at device's native rate (no 'ar') to avoid pitch issues
+        # Force 48 kHz mono, s16, and 20 ms frames (960 samples) for Opus/WebRTC
         player = MediaPlayer(
             alsa_in,
             format="alsa",
             options={
                 "ac": "1",
-                # "af": "highpass=f=300,lowpass=f=3000"  # optional
+                "ar": "48000",
+                "sample_fmt": "s16",
+                # Resample with high quality and normalize frame size to 960 samples
+                "af": "aresample=48000:resampler=soxr,asetnsamples=n=960:p=0",
             },
         )
         if player.audio:
