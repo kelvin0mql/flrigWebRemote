@@ -444,8 +444,8 @@ _loop_thread.start()
 
 class FfmpegPcmTrack(MediaStreamTrack):
     """
-    Capture from ALSA via ffmpeg, resample to 48 kHz mono s16, and emit exact
-    20 ms (960-sample or 280-sample, depending) frames with correct timestamps.
+    Capture from ALSA via ffmpeg, resample to SAMPLE_RATE mono s16, and emit exact
+    20 ms (FRAME_SAMPLES) frames with correct timestamps.
     """
     kind = "audio"
 
@@ -466,9 +466,9 @@ class FfmpegPcmTrack(MediaStreamTrack):
             "-hide_banner", "-loglevel", "warning",
             "-f", "alsa",
             "-ac", "1",
-            "-ar", "SAMPLE_RATE",
+            "-ar", str(self.sample_rate),
             "-i", alsa_device,
-            "-af", "asetnsamples=n=FRAME_SAMPLES:p=0,aresample=SAMPLE_RATE:resampler=soxr",
+            "-af", f"asetnsamples=n={self.samples_per_frame}:p=0,aresample={self.sample_rate}:resampler=soxr",
             "-f", "s16le",
             "-"
         ]
