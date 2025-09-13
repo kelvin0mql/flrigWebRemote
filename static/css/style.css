@@ -194,3 +194,31 @@ body {
 .vfo-b-display {
     display: none;
 }
+
+/* Compact metrics row (PWR | SWR | Mode | Bandwidth) */
+.metric {
+    background-color: #f8f9fa;
+    border: 1px solid #dee2e6;
+    border-radius: 6px;
+    padding: 10px;
+    text-align: center;
+}
+
+.metric-label {
+    font-size: 0.85rem;
+    color: #6c757d;
+    margin-bottom: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.metric-value {
+    font-size: 1.3rem;
+    font-weight: 700;
+    color: #212529;
+}
+
+/* SWR severity colors */
+.metric-value.swr-ok { color: #28a745; }
+.metric-value.swr-warn { color: #ffc107; }
+.metric-value.swr-bad { color: #dc3545; }

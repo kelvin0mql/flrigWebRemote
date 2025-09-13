@@ -30,24 +30,38 @@
                 </div>
             </div>
 
-            <!-- Mode, Bandwidth, and SWR Row -->
+            <!-- PWR, SWR, Mode, Bandwidth (single row) -->
             <div class="row mb-3">
-                <div class="col-md-4">
+                <div class="col-6 col-md-3">
                     <div class="control-group">
-                        <label class="form-label">SWR</label>
-                        <div class="swr-display" id="swr-value">0.0</div>
+                        <div class="metric">
+                            <div class="metric-label">PWR</div>
+                            <div class="metric-value" id="pwr-value">0</div>
+                        </div>
                     </div>
                 </div>
-                <div class="col-md-4">
+                <div class="col-6 col-md-3">
                     <div class="control-group">
-                        <label class="form-label">Mode</label>
-                        <div class="mode-display" id="current-mode">Unknown</div>
+                        <div class="metric">
+                            <div class="metric-label">SWR</div>
+                            <div class="metric-value" id="swr-value">0.0</div>
+                        </div>
                     </div>
                 </div>
-                <div class="col-md-4">
+                <div class="col-6 col-md-3">
                     <div class="control-group">
-                        <label class="form-label">Bandwidth</label>
-                        <div class="bandwidth-display" id="current-bandwidth">Unknown</div>
+                        <div class="metric">
+                            <div class="metric-label">Mode</div>
+                            <div class="mode-display metric-value" id="current-mode">Unknown</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="col-6 col-md-3">
+                    <div class="control-group">
+                        <div class="metric">
+                            <div class="metric-label">Bandwidth</div>
+                            <div class="bandwidth-display metric-value" id="current-bandwidth">Unknown</div>
+                        </div>
                     </div>
                 </div>
             </div>
