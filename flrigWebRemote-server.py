@@ -599,6 +599,103 @@ class Tone1kTrack(MediaStreamTrack):
         self._pts += self.samples_per_frame
         return frame
 
+class ArecordPcmTrack(MediaStreamTrack):
+    """
+    Capture mono PCM from ALSA using arecord at SAMPLE_RATE Hz, s16le,
+    and emit exact 20 ms frames (FRAME_SAMPLES) with proper timestamps.
+    """
+    kind = "audio"
+
+    def __init__(self, alsa_device: str):
+        super().__init__()
+        self.sample_rate = SAMPLE_RATE
+        self.channels = 1
+        self.samples_per_frame = FRAME_SAMPLES
+        self._frame_bytes = self.samples_per_frame * self.channels * 2  # s16
+        self._closed = False
+        self._time_base = Fraction(1, self.sample_rate)
+        self._pts = 0
+        self._buffer = bytearray()
+
+        # arecord: force exact format/rate; buffer/period to avoid xruns
+        self._cmd = [
+            "arecord",
+            "-D", alsa_device,
+            "-f", "S16_LE",
+            "-c", "1",
+            "-r", str(self.sample_rate),
+            "-t", "raw",
+            "-q",
+            "-B", "200000",   # 200 ms buffer
+            "-F", "20000",    # 20 ms period
+            "-"
+        ]
+        self._proc = subprocess.Popen(
+            self._cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0
+        )
+
+    async def recv(self) -> av.AudioFrame:
+        while len(self._buffer) < self._frame_bytes:
+            if self._closed:
+                return self._silence_frame()
+            chunk = await asyncio.get_event_loop().run_in_executor(
+                None, self._read_exact, self._frame_bytes - len(self._buffer)
+            )
+            if not chunk:
+                return self._silence_frame()
+            self._buffer.extend(chunk)
+
+        data = bytes(self._buffer[:self._frame_bytes])
+        del self._buffer[:self._frame_bytes]
+
+        frame = av.AudioFrame(format="s16", layout="mono", samples=self.samples_per_frame)
+        frame.planes[0].update(data)
+        frame.sample_rate = self.sample_rate
+        frame.time_base = self._time_base
+        frame.pts = self._pts
+        self._pts += self.samples_per_frame
+        return frame
+
+    def _read_exact(self, n: int) -> bytes:
+        try:
+            return self._proc.stdout.read(n)
+        except Exception:
+            return b""
+
+    def _silence_frame(self) -> av.AudioFrame:
+        frame = av.AudioFrame(format="s16", layout="mono", samples=self.samples_per_frame)
+        frame.planes[0].update(b"\x00" * self._frame_bytes)
+        frame.sample_rate = self.sample_rate
+        frame.time_base = self._time_base
+        frame.pts = self._pts
+        self._pts += self.samples_per_frame
+        return frame
+
+    def stop(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            if self._proc and self._proc.poll() is None:
+                try:
+                    self._proc.terminate()
+                except Exception:
+                    pass
+                try:
+                    self._proc.wait(timeout=1)
+                except Exception:
+                    pass
+            if self._proc and self._proc.stdout:
+                try:
+                    self._proc.stdout.close()
+                except Exception:
+                    pass
+        finally:
+            try:
+                super().stop()
+            except Exception:
+                pass
+
 # Helpers for PeerConnection lifecycle and ICE
 
 def _alsa_input_device():
@@ -687,7 +784,8 @@ async def _create_pc_with_rig_rx():
     if not alsa_in:
         print("No ALSA input configured; cannot provide WebRTC audio.")
     else:
-        track = FfmpegPcmTrack(alsa_in)
+        # Use arecord-backed capture to enforce exact SAMPLE_RATE/FRAME_SAMPLES
+        track = ArecordPcmTrack(alsa_in)
         pc.addTrack(track)
 
     return pc
