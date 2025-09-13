@@ -449,15 +449,14 @@ class FfmpegPcmTrack(MediaStreamTrack):
         super().__init__()
         self.sample_rate = 48000
         self.channels = 1
-        self.samples_per_frame = 960  # 20 ms @ 48 kHz
+        self.samples_per_frame = 960
+        self._frame_bytes = self.samples_per_frame * self.channels * 2  # s16 mono
+        self._closed = False
+        self._buffer = bytearray()
+        # Timestamp state
         self._time_base = Fraction(1, self.sample_rate)
         self._pts = 0
-        self._closed = False
 
-        # Build ffmpeg command:
-        # -f alsa -ac 1 -ar 48000 -i <device> : open ALSA at 48k mono
-        # -af asetnsamples=n=960:p=0,aresample=48000:resampler=soxr : normalize frames and ensure 48k
-        # -f s16le - : raw PCM to stdout
         self._cmd = [
             "ffmpeg",
             "-hide_banner", "-loglevel", "warning",
@@ -469,16 +468,9 @@ class FfmpegPcmTrack(MediaStreamTrack):
             "-f", "s16le",
             "-"
         ]
-        # Start ffmpeg
         self._proc = subprocess.Popen(
-            self._cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            bufsize=0,
+            self._cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0
         )
-
-        self._frame_bytes = self.samples_per_frame * self.channels * 2  # s16 mono
-        self._buffer = bytearray()
 
     async def recv(self) -> av.AudioFrame:
         # Fill buffer to one frame (1920 bytes)
@@ -496,7 +488,10 @@ class FfmpegPcmTrack(MediaStreamTrack):
 
         frame = av.AudioFrame(format="s16", layout="mono", samples=self.samples_per_frame)
         frame.planes[0].update(data)
-        frame.sample_rate = 48000  # provide encoder the rate; let aiortc timestamp
+        frame.sample_rate = 48000
+        frame.time_base = self._time_base
+        frame.pts = self._pts
+        self._pts += self.samples_per_frame
         return frame
 
     def _read_exact(self, n: int) -> bytes:
@@ -509,18 +504,6 @@ class FfmpegPcmTrack(MediaStreamTrack):
         frame = av.AudioFrame(format="s16", layout="mono", samples=self.samples_per_frame)
         frame.planes[0].update(b"\x00" * self._frame_bytes)
         frame.sample_rate = 48000
-        return frame
-
-    def _read_exact(self, n: int) -> bytes:
-        try:
-            return self._proc.stdout.read(n)
-        except Exception:
-            return b""
-
-    def _silence_frame(self) -> av.AudioFrame:
-        frame = av.AudioFrame(format="s16", layout="mono", samples=self.samples_per_frame)
-        frame.planes[0].update(b"\x00" * self._frame_bytes)
-        frame.sample_rate = self.sample_rate
         frame.time_base = self._time_base
         frame.pts = self._pts
         self._pts += self.samples_per_frame
@@ -570,6 +553,9 @@ class Tone1kTrack(MediaStreamTrack):
         self.samples_per_frame = 960
         self.phase = 0.0
         self._closed = False
+        # add timestamp state to match FfmpegPcmTrack
+        self._time_base = Fraction(1, self.sample_rate)
+        self._pts = 0
 
     async def recv(self) -> av.AudioFrame:
         if self._closed:
@@ -587,23 +573,20 @@ class Tone1kTrack(MediaStreamTrack):
 
         frame = av.AudioFrame(format="s16", layout="mono", samples=self.samples_per_frame)
         frame.planes[0].update(bytes(buf))
-        frame.sample_rate = 48000  # provide encoder the rate; let aiortc timestamp
+        frame.sample_rate = 48000
+        frame.time_base = self._time_base
+        frame.pts = self._pts
+        self._pts += self.samples_per_frame
         return frame
 
     def _silence_frame(self) -> av.AudioFrame:
         frame = av.AudioFrame(format="s16", layout="mono", samples=self.samples_per_frame)
         frame.planes[0].update(b"\x00" * (self.samples_per_frame * 2))
         frame.sample_rate = 48000
+        frame.time_base = self._time_base
+        frame.pts = self._pts
+        self._pts += self.samples_per_frame
         return frame
-
-    def stop(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
-        try:
-            super().stop()
-        except Exception:
-            pass
 
 # Helpers for PeerConnection lifecycle and ICE
 
