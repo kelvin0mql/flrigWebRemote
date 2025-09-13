@@ -397,8 +397,9 @@ function togglePTT() {
     pttBtn.style.color = 'white';
     socket.emit('ptt_control', { action: 'on' });
 
-    if (rxAudioEl && isListening()) {
-      stopLiveAudioStream();
+    // Do NOT disconnect WebRTC anymore; just mute local playout during TX
+    if (rxAudioEl) {
+      rxAudioEl.muted = true;
     }
   } else {
     pttBtn.className = 'btn btn-success';
@@ -406,7 +407,12 @@ function togglePTT() {
     pttBtn.style.color = 'white';
     socket.emit('ptt_control', { action: 'off' });
 
-    // if we were listening before TX, reconnect RX audio now
+    // Unmute playout; we didn't disconnect the stream
+    if (rxAudioEl) {
+      rxAudioEl.muted = false;
+    }
+
+    // if we were listening before TX and the stream was somehow closed, reconnect
     if (wasListeningBeforePTT && !webrtcConnected) {
       startWebRTC();
     }
