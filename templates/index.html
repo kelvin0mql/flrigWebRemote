@@ -61,7 +61,7 @@
                 </div>
             </div>
 
-            <!-- Control Sliders Row 1: Mic and Power -->
+            <!-- Control Sliders Row 1: Mic and Rf -->
             <div class="row mb-4">
                 <div class="col-md-6">
                     <div class="control-group">
@@ -71,24 +71,8 @@
                 </div>
                 <div class="col-md-6">
                     <div class="control-group">
-                        <label class="form-label">Pwr: <span id="power-value">0</span></label>
-                        <input type="range" class="form-range" id="power-slider" min="0" max="100" disabled>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Control Sliders Row 2: RF and Volume -->
-            <div class="row mb-4">
-                <div class="col-md-6">
-                    <div class="control-group">
                         <label class="form-label">RF: <span id="rf-value">0</span></label>
                         <input type="range" class="form-range" id="rf-slider" min="0" max="100" disabled>
-                    </div>
-                </div>
-                <div class="col-md-6">
-                    <div class="control-group">
-                        <label class="form-label">Vol: <span id="volume-value">0</span></label>
-                        <input type="range" class="form-range" id="volume-slider" min="0" max="100" disabled>
                     </div>
                 </div>
             </div>
@@ -133,30 +117,40 @@
                 </div>
             </div>
 
-            <!-- Mode Buttons -->
-            <div class="mode-buttons">
-                <h5>Mode</h5>
-                <div class="row">
-                    <div class="col-6 col-md-2 mb-2">
-                        <button class="btn btn-outline-secondary w-100" disabled>CW</button>
-                    </div>
-                    <div class="col-6 col-md-2 mb-2">
-                        <button class="btn btn-outline-secondary w-100" disabled>QSK</button>
-                    </div>
-                    <div class="col-6 col-md-2 mb-2">
-                        <button class="btn btn-outline-secondary w-100" disabled>Vox</button>
-                    </div>
-                    <div class="col-6 col-md-2 mb-2">
-                        <button class="btn btn-outline-secondary w-100" disabled>A</button>
-                    </div>
-                    <div class="col-6 col-md-2 mb-2">
-                        <button class="btn btn-outline-secondary w-100" disabled>B</button>
-                    </div>
-                    <div class="col-6 col-md-2 mb-2">
-                        <button class="btn btn-outline-secondary w-100" disabled>C</button>
-                    </div>
+            <!-- Extras (A) -->
+            <div class="mb-4">
+                <h5>Extras (A)</h5>
+                <div class="row g-2">
+                    <div class="col-6 col-md-3"><button id="a-btn-1" class="btn btn-outline-secondary w-100">Ant1</button></div>
+                    <div class="col-6 col-md-3"><button id="a-btn-2" class="btn btn-outline-secondary w-100">Ant2</button></div>
+                    <div class="col-6 col-md-3"><button id="a-btn-3" class="btn btn-outline-secondary w-100">DNR On</button></div>
+                    <div class="col-6 col-md-3"><button id="a-btn-4" class="btn btn-outline-secondary w-100">DNR Off</button></div>
+                </div>
+                <div class="row g-2 mt-2">
+                    <div class="col-6 col-md-3"><button id="a-btn-5" class="btn btn-outline-secondary w-100">5W</button></div>
+                    <div class="col-6 col-md-3"><button id="a-btn-6" class="btn btn-outline-secondary w-100">15W</button></div>
+                    <div class="col-6 col-md-3"><button id="a-btn-7" class="btn btn-outline-secondary w-100">30W</button></div>
+                    <div class="col-6 col-md-3"><button id="a-btn-8" class="btn btn-outline-secondary w-100">60W</button></div>
                 </div>
             </div>
+
+            <!-- Extras (B) -->
+            <div class="mb-4">
+                <h5>Extras (B)</h5>
+                <div class="row g-2">
+                    <div class="col-6 col-md-3"><button id="b-btn-1" class="btn btn-outline-secondary w-100">100W</button></div>
+                    <div class="col-6 col-md-3"><button id="b-btn-2" class="btn btn-outline-secondary w-100">cmd 10</button></div>
+                    <div class="col-6 col-md-3"><button id="b-btn-3" class="btn btn-outline-secondary w-100">cmd 11</button></div>
+                    <div class="col-6 col-md-3"><button id="b-btn-4" class="btn btn-outline-secondary w-100">cmd 12</button></div>
+                </div>
+                <div class="row g-2 mt-2">
+                    <div class="col-6 col-md-3"><button id="b-btn-5" class="btn btn-outline-secondary w-100">cmd 13</button></div>
+                    <div class="col-6 col-md-3"><button id="b-btn-6" class="btn btn-outline-secondary w-100">cmd 14</button></div>
+                    <div class="col-6 col-md-3"><button id="b-btn-7" class="btn btn-outline-secondary w-100">cmd 15</button></div>
+                    <div class="col-6 col-md-3"><button id="b-btn-8" class="btn btn-outline-secondary w-100">cmd 16</button></div>
+                </div>
+            </div>
+            <!-- Removed old "Mode Buttons" block (CW/QSK/Vox/A/B/C) -->
         </div>
     </div>
 </div>
