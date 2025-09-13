@@ -855,27 +855,6 @@ def handle_tune_control(data):
     emit('tune_response', {'success': success, 'error': message if not success else None})
 
 # Debug helper: list flrig methods containing a substring (prints once)
-      _BAND_METHODS_LOGGED = False
-      def _log_flrig_methods_once(substr: str = "band"):
-          global _BAND_METHODS_LOGGED
-          if _BAND_METHODS_LOGGED:
-              return
-          try:
-              methods = flrig_remote.client.system.listMethods()
-              hits = [m for m in methods if substr.lower() in m.lower()]
-              print(f"[flrig] methods containing '{substr}':")
-              for m in sorted(hits):
-                  print("   ", m)
-              if not hits:
-                  # If nothing matched, still print a short sample to guide us
-                  print("[flrig] No methods matched. First 20 methods:")
-                  for m in methods[:20]:
-                      print("   ", m)
-          except Exception as e:
-              print(f"[flrig] method introspection failed: {e}")
-          _BAND_METHODS_LOGGED = True
-
-# Debug helper: list flrig methods containing a substring (prints once)
 _BAND_METHODS_LOGGED = False
 def _log_flrig_methods_once(substr: str = "band"):
     global _BAND_METHODS_LOGGED
