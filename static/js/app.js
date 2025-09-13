@@ -39,38 +39,35 @@ let audioMutedByPTT = false;
 let audioPrevVolume = 1.0;
 let audioWasListeningBeforePTT = false;
 
+// --- WebRTC state ---
+let pc = null;
+let webrtcConnected = false;
+
 // Helpers to control the live stream from here (independent of the UI button text)
 function isListening() {
-  return rxAudioEl && rxAudioEl.getAttribute('src') && !rxAudioEl.paused;
+  // repurposed to reflect WebRTC connection state
+  return webrtcConnected;
 }
 
 function updateListenButtons() {
   if (!listenWavBtn || !listenMp3Btn) return;
-  if (isListening()) {
-    if (currentStreamKind === 'wav') {
-      listenWavBtn.textContent = 'Stop WAV';
-      listenWavBtn.className = 'btn btn-secondary';
-      listenMp3Btn.textContent = 'Listen MP3';
-      listenMp3Btn.className = 'btn btn-outline-secondary';
-    } else if (currentStreamKind === 'mp3') {
-      listenMp3Btn.textContent = 'Stop MP3';
-      listenMp3Btn.className = 'btn btn-secondary';
-      listenWavBtn.textContent = 'Listen WAV';
-      listenWavBtn.className = 'btn btn-outline-secondary';
-    }
+  // Repurpose UI: left button = Connect, right button = Disconnect
+  if (webrtcConnected) {
+    listenWavBtn.textContent = 'Connected (Opus)';
+    listenWavBtn.className = 'btn btn-secondary';
+    listenMp3Btn.textContent = 'Disconnect';
+    listenMp3Btn.className = 'btn btn-outline-danger';
   } else {
-    listenWavBtn.textContent = 'Listen WAV';
-    listenMp3Btn.textContent = 'Listen MP3';
+    listenWavBtn.textContent = 'Connect Audio';
     listenWavBtn.className = 'btn btn-outline-secondary';
+    listenMp3Btn.textContent = 'Disconnect';
     listenMp3Btn.className = 'btn btn-outline-secondary';
   }
 }
 
 function stopLiveAudioStream() {
-  if (!rxAudioEl) return;
-  try { rxAudioEl.pause(); } catch (_) {}
-  rxAudioEl.removeAttribute('src');
-  rxAudioEl.load(); // closes HTTP stream and clears buffer
+  // replaced by stopWebRTC()
+  stopWebRTC();
   currentStreamKind = null;
   updateListenButtons();
 }
@@ -85,70 +82,117 @@ function attachAudioDebug() {
   rxAudioEl.addEventListener('ended', () => console.log('[audio] ended'));
 }
 
-function startLiveAudioStream(kind) {
+// --- New: WebRTC connect/disconnect ---
+async function startWebRTC() {
   if (!rxAudioEl) return;
+  if (webrtcConnected) return;
+
   attachAudioDebug();
 
-  const liveUrl = (kind === 'wav') ? '/audio.wav' : '/audio.mp3';
-  rxAudioEl.removeAttribute('src');
-  rxAudioEl.load();
+  pc = new RTCPeerConnection({
+    iceServers: [], // local LAN, no STUN/TURN needed
+    bundlePolicy: 'max-bundle',
+  });
 
-  rxAudioEl.src = liveUrl;
-  rxAudioEl.muted = false;
-  currentStreamKind = kind;
+  // Low-latency hints (supported best on Chromium; Safari will still behave well)
+  try {
+    pc.getReceivers().forEach(r => {
+      if (typeof r.playoutDelayHint !== 'undefined') r.playoutDelayHint = 0.08; // ~80ms
+    });
+  } catch (_) {}
 
-  let triedOnce = false;
-
-  const tryPlay = () => {
-    console.log(`[audio] start ${kind} -> ${liveUrl}`);
-    const p = rxAudioEl.play();
-    if (p && typeof p.then === 'function') {
-      p.then(() => {
-        console.log('[audio] play() resolved');
-        updateListenButtons();
-      }).catch((e) => {
-        console.warn('[audio] play() rejected:', e);
-        if (!triedOnce) {
-          triedOnce = true;
-          // Force re-load and retry once after a short tick
-          rxAudioEl.load();
-          setTimeout(() => {
-            console.log('[audio] retrying play()');
-            tryPlay();
-          }, 200);
-        } else {
-          // Give up gracefully
-          currentStreamKind = null;
-          updateListenButtons();
-        }
-      });
-    } else {
-      updateListenButtons();
+  pc.onicecandidate = (e) => {
+    if (!e.candidate) {
+      // Final candidate gathering complete; nothing special to do in trickle-less mode
     }
   };
 
-  tryPlay();
+  pc.ontrack = (event) => {
+    console.log('[webrtc] ontrack: kind=', event.track.kind);
+    if (event.track.kind === 'audio') {
+      const inboundStream = event.streams[0] || new MediaStream([event.track]);
+      rxAudioEl.srcObject = inboundStream;
+      rxAudioEl.muted = false;
+      const p = rxAudioEl.play();
+      if (p && p.catch) {
+        p.catch(err => console.warn('[webrtc] audio play() rejected:', err));
+      }
+    }
+  };
+
+  // Ask to receive only (server will add rig RX track)
+  pc.addTransceiver('audio', { direction: 'recvonly' });
+
+  // Create offer
+  const offer = await pc.createOffer({
+    offerToReceiveAudio: true,
+    offerToReceiveVideo: false
+  });
+  await pc.setLocalDescription(offer);
+
+  // Send SDP to server, get answer
+  const res = await fetch('/api/webrtc/offer', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      sdp: pc.localDescription.sdp,
+      type: pc.localDescription.type
+    })
+  });
+
+  if (!res.ok) {
+    console.error('[webrtc] offer failed:', res.status, await res.text());
+    await stopWebRTC();
+    return;
+  }
+
+  const answer = await res.json();
+  await pc.setRemoteDescription(answer);
+  webrtcConnected = true;
+  updateListenButtons();
+  console.log('[webrtc] connected');
+}
+
+async function stopWebRTC() {
+  try {
+    if (rxAudioEl) {
+      try { rxAudioEl.pause(); } catch (_) {}
+      rxAudioEl.srcObject = null;
+      rxAudioEl.removeAttribute('src');
+      rxAudioEl.load();
+    }
+    if (pc) {
+      pc.getSenders().forEach(s => { try { s.track && s.track.stop(); } catch (_) {} });
+      pc.getReceivers().forEach(r => { try { r.track && r.track.stop(); } catch (_) {} });
+      pc.ontrack = null;
+      pc.onicecandidate = null;
+      try { pc.close(); } catch (_) {}
+    }
+  } finally {
+    pc = null;
+    webrtcConnected = false;
+    updateListenButtons();
+    console.log('[webrtc] disconnected');
+  }
+}
+
+function startLiveAudioStream(kind) {
+  // legacy HTTP streaming removed in favor of WebRTC
+  console.log('[audio] legacy HTTP streaming disabled; using WebRTC');
 }
 
 // Wire up the two listen buttons
 if (listenWavBtn) {
   listenWavBtn.addEventListener('click', () => {
-    if (isListening() && currentStreamKind === 'wav') {
-      stopLiveAudioStream();
-    } else {
-      // If another stream is active, stop it first
-      if (isListening()) stopLiveAudioStream();
-      startLiveAudioStream('wav');
+    if (!webrtcConnected) {
+      startWebRTC();
     }
   });
 }
 if (listenMp3Btn) {
   listenMp3Btn.addEventListener('click', () => {
-    if (isListening() && currentStreamKind === 'mp3') {
-      stopLiveAudioStream();
-    } else {
-      if (isListening()) stopLiveAudioStream();
-      startLiveAudioStream('mp3');
+    if (webrtcConnected) {
+      stopWebRTC();
     }
   });
 }

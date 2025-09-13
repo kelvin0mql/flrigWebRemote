@@ -1,4 +1,4 @@
-from flask import Flask, render_template, jsonify, Response, stream_with_context
+from flask import Flask, render_template, jsonify, Response, stream_with_context, request
 from flask_socketio import SocketIO, emit
 import xmlrpc.client
 import threading
@@ -9,6 +9,11 @@ import json
 import sys
 import subprocess
 import re
+import asyncio
+
+# WebRTC / aiortc
+from aiortc import RTCPeerConnection, RTCSessionDescription
+from aiortc.contrib.media import MediaPlayer  # ALSA capture/playback via ffmpeg
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'flrig-web-remote-secret'
@@ -23,6 +28,7 @@ server_url = f"http://{FLRIG_HOST}:{FLRIG_PORT}/RPC2"
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(SCRIPT_DIR, "flrigWebRemote.config.json")
 
+
 def load_config():
     if os.path.exists(CONFIG_PATH):
         try:
@@ -32,6 +38,7 @@ def load_config():
             print(f"Warning: failed to read config: {e}")
     return {}
 
+
 def save_config(cfg: dict):
     try:
         with open(CONFIG_PATH, "w") as f:
@@ -39,6 +46,7 @@ def save_config(cfg: dict):
         print(f"Saved configuration to {CONFIG_PATH}")
     except Exception as e:
         print(f"Error saving config: {e}")
+
 
 def enumerate_input_devices_alsa():
     """
@@ -76,6 +84,7 @@ def enumerate_input_devices_alsa():
     devices.sort(key=lambda d: (0 if "usb" in d["name"].lower() else 1, d["card"], d["device"]))
     return devices
 
+
 def enumerate_playback_devices_alsa():
     """
     Use 'aplay -l' to list output-capable ALSA devices.
@@ -110,6 +119,7 @@ def enumerate_playback_devices_alsa():
     devices.sort(key=lambda d: (0 if "usb" in d["name"].lower() else 1, d["card"], d["device"]))
     return devices
 
+
 def prompt_select_device(devices, title="input"):
     """Interactive prompt to select device; returns selected device dict or None."""
     if not devices:
@@ -131,11 +141,13 @@ def prompt_select_device(devices, title="input"):
                 return devices[n]
         print("Invalid selection. Try again.")
 
+
 def auto_pick_device(devices):
     """Non-interactive fallback: first USB if available, else first device."""
     if not devices:
         return None
     return devices[0]
+
 
 def validate_stored_capture(cfg_audio_in):
     """
@@ -155,6 +167,7 @@ def validate_stored_capture(cfg_audio_in):
     except Exception:
         return False
 
+
 def validate_stored_playback(cfg_audio_out):
     """
     Validate stored ALSA output device by a 1-second silent playback from /dev/zero.
@@ -172,6 +185,7 @@ def validate_stored_playback(cfg_audio_out):
         return True
     except Exception:
         return False
+
 
 def ensure_audio_config(force_reconfigure: bool = False):
     """
@@ -248,11 +262,13 @@ def ensure_audio_config(force_reconfigure: bool = False):
 
     return cfg
 
+
 # Optional CLI flag to force reconfiguration: --reconfigure-audio
 FORCE_RECONFIG = ("--reconfigure-audio" in sys.argv)
 
 # Initialize audio configuration on startup (ALSA only)
 AUDIO_CONFIG = ensure_audio_config(force_reconfigure=FORCE_RECONFIG)
+
 
 class FlrigWebRemote:
     def __init__(self):
@@ -354,9 +370,7 @@ class FlrigWebRemote:
             return False, "Not connected to flrig"
 
         try:
-            # Debug logging
             print(f"Attempting to set frequency to: {frequency_hz}Hz (type: {type(frequency_hz)})")
-            # flrig expects float/double
             freq_hz_float = float(frequency_hz)
             print(f"Converted to float: {freq_hz_float}")
             self.client.rig.set_vfoA(freq_hz_float)
@@ -372,9 +386,9 @@ class FlrigWebRemote:
 
         try:
             if action == 'start':
-                self.client.rig.tune(1)  # or self.client.rig.set_tune(1)
+                self.client.rig.tune(1)
             else:
-                self.client.rig.tune(0)  # or self.client.rig.set_tune(0)
+                self.client.rig.tune(0)
             return True, f"Tune {action} successful"
         except Exception as e:
             print(f"Error controlling tuner: {e}")
@@ -395,18 +409,80 @@ class FlrigWebRemote:
             print(f"Error controlling PTT: {e}")
             return False, str(e)
 
+
 # Global instance
 flrig_remote = FlrigWebRemote()
+
+# --- WebRTC (aiortc) state and helpers ---
+pcs = set()
+
+
+def _alsa_input_device():
+    """Return ALSA input device string like 'plughw:X,Y' or None."""
+    return AUDIO_CONFIG.get("audio_in", {}).get("alsa_device")
+
+
+async def _create_pc_with_rig_rx():
+    """
+    Create a PeerConnection that sends rig RX audio (from ALSA) to the client.
+    """
+    pc = RTCPeerConnection()
+    pcs.add(pc)
+
+    @pc.on("connectionstatechange")
+    def on_connectionstatechange():
+        print("WebRTC connection state:", pc.connectionState)
+        if pc.connectionState in ("failed", "closed", "disconnected"):
+            try:
+                pcs.discard(pc)
+                asyncio.ensure_future(_cleanup_pc(pc))
+            except Exception:
+                pass
+
+    # Add rig RX track (ALSA capture via ffmpeg/MediaPlayer)
+    alsa_in = _alsa_input_device()
+    if not alsa_in:
+        print("No ALSA input configured; cannot provide WebRTC audio.")
+    else:
+        # Capture mono 16kHz for conversational quality/latency
+        player = MediaPlayer(
+            alsa_in,
+            format="alsa",
+            options={
+                "ac": "1",
+                "ar": "16000",
+                # Optional filtering similar to your ffmpeg chain:
+                # "af": "highpass=f=300,lowpass=f=3000"
+            },
+        )
+        if player.audio:
+            pc.addTrack(player.audio)
+        else:
+            print("Failed to create audio track from ALSA input.")
+
+    return pc
+
+
+async def _cleanup_pc(pc: RTCPeerConnection):
+    try:
+        await pc.close()
+    except Exception:
+        pass
+
+
+# -------------------- Flask routes --------------------
 
 @app.route('/')
 def index():
     """Main page."""
     return render_template('index.html')
 
+
 @app.route('/api/status')
 def api_status():
     """API endpoint to get current status."""
     return jsonify(flrig_remote.current_data)
+
 
 def background_updater():
     """Background thread to update flrig data and emit to clients."""
@@ -415,14 +491,17 @@ def background_updater():
         socketio.emit('status_update', flrig_remote.current_data)
         time.sleep(2)  # Update every 2 seconds
 
+
 @socketio.on('connect')
 def handle_connect():
     print('Client connected')
     emit('status_update', flrig_remote.current_data)
 
+
 @socketio.on('disconnect')
 def handle_disconnect():
     print('Client disconnected')
+
 
 @socketio.on('ptt_control')
 def handle_ptt_control(data):
@@ -430,135 +509,61 @@ def handle_ptt_control(data):
     success, message = flrig_remote.ptt_control(data['action'])
     emit('ptt_response', {'success': success, 'error': message if not success else None})
 
-# ------------- Audio streaming (live, low-latency, MP3 only) -------------
 
-_ffmpeg_proc_mp3 = None
-_ffmpeg_proc_wav = None  # add WAV
+@socketio.on('tune_control')
+def handle_tune_control(data):
+    """Handle Tune control requests."""
+    success, message = flrig_remote.tune_control(data['action'])
+    emit('tune_response', {'success': success, 'error': message if not success else None})
 
-def _ffmpeg_common_input_args(alsa_device: str):
-    # Low-latency ALSA capture chain with wallclock pacing
-    return [
-        "-hide_banner",
-        "-loglevel", "warning",
-        "-f", "alsa",
-        "-thread_queue_size", "1024",
-        "-ac", "1",
-        "-ar", "16000",
-        "-i", alsa_device,
-        "-use_wallclock_as_timestamps", "1",
-        "-fflags", "+genpts",
-        "-fflags", "nobuffer",
-        "-probesize", "32",
-        "-analyzeduration", "0",
-        "-flush_packets", "1"
-    ]
 
-def start_ffmpeg_rx_stream_wav(alsa_device: str):
-    global _ffmpeg_proc_wav
-    if _ffmpeg_proc_wav and _ffmpeg_proc_wav.poll() is None:
-        return _ffmpeg_proc_wav
-    if not alsa_device:
-        print("No ALSA input device configured; WAV stream unavailable.")
-        return None
-    cmd = [
-        "ffmpeg",
-        *_ffmpeg_common_input_args(alsa_device),
-        "-af", "highpass=f=300,lowpass=f=3000",
-        "-ac", "1",
-        "-ar", "16000",
-        "-c:a", "pcm_s16le",
-        "-muxpreload", "0",
-        "-muxdelay", "0",
-        "-f", "wav",
-        "-"
-    ]
+@socketio.on('frequency_change')
+def handle_frequency_change(data):
+    """Handle frequency change requests."""
+    freq_hz = data.get('frequency')
+    success, message = flrig_remote.set_frequency(freq_hz)
+    emit('frequency_changed', {'success': success, 'error': message if not success else None})
+
+
+# ------------- Audio: replaced HTTP streaming with WebRTC (Opus) -------------
+
+@app.post('/api/webrtc/offer')
+def api_webrtc_offer():
+    """
+    Signaling endpoint: accepts an SDP offer, returns an SDP answer.
+    Publishes the rig RX ALSA capture as an Opus track to the browser.
+    """
     try:
-        _ffmpeg_proc_wav = subprocess.Popen(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0
-        )
-        print(f"Started ffmpeg WAV stream from {alsa_device}")
-        return _ffmpeg_proc_wav
+        payload = request.get_json(force=True, silent=False)
+        offer = RTCSessionDescription(sdp=payload["sdp"], type=payload["type"])
     except Exception as e:
-        print(f"Failed to start WAV stream: {e}")
-        _ffmpeg_proc_wav = None
-        return None
+        return jsonify({"error": f"invalid offer: {e}"}), 400
 
-def start_ffmpeg_rx_stream_mp3(alsa_device: str):
-    global _ffmpeg_proc_mp3
-    if _ffmpeg_proc_mp3 and _ffmpeg_proc_mp3.poll() is None:
-        return _ffmpeg_proc_mp3
-    if not alsa_device:
-        print("No ALSA input device configured; MP3 stream unavailable.")
-        return None
-    cmd = [
-        "ffmpeg",
-        *_ffmpeg_common_input_args(alsa_device),
-        "-af", "highpass=f=300,lowpass=f=3000",
-        "-ac", "1",
-        "-ar", "22050",
-        "-c:a", "libmp3lame",
-        "-b:a", "24k",
-        "-write_xing", "0",
-        "-reservoir", "0",
-        "-muxpreload", "0",
-        "-muxdelay", "0",
-        "-f", "mp3",
-        "-"
-    ]
+    async def handle():
+        pc = await _create_pc_with_rig_rx()
+        await pc.setRemoteDescription(offer)
+        # Create answer; Opus will be negotiated automatically by the browser and aiortc
+        answer = await pc.createAnswer()
+        await pc.setLocalDescription(answer)
+        return {
+            "sdp": pc.localDescription.sdp,
+            "type": pc.localDescription.type
+        }
+
+    # Run the coroutine in a dedicated event loop for this request
     try:
-        _ffmpeg_proc_mp3 = subprocess.Popen(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0
-        )
-        print(f"Started ffmpeg MP3 stream from {alsa_device}")
-        return _ffmpeg_proc_mp3
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        result = loop.run_until_complete(handle())
+        loop.run_until_complete(asyncio.sleep(0))  # yield once
+        loop.close()
+        return jsonify(result)
     except Exception as e:
-        print(f"Failed to start MP3 stream: {e}")
-        _ffmpeg_proc_mp3 = None
-        return None
+        return jsonify({"error": f"webrtc failed: {e}"}), 500
 
-def _stream_proc_stdout(proc):
-    if not proc or not proc.stdout:
-        return
-    while True:
-        chunk = proc.stdout.read(4096)
-        if not chunk:
-            break
-        yield chunk
 
-@app.route('/audio.wav')
-def audio_wav():
-    alsa_in = AUDIO_CONFIG.get("audio_in", {}).get("alsa_device")
-    proc = start_ffmpeg_rx_stream_wav(alsa_in)
-    if not proc:
-        return Response("Audio not available\n", status=503, mimetype="text/plain")
-    resp = Response(stream_with_context(_stream_proc_stdout(proc)), mimetype="audio/wav")
-    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
-    resp.headers["Pragma"] = "no-cache"
-    return resp
+# NOTE: Legacy HTTP audio endpoints (/audio.wav, /audio, /audio.mp3) have been removed.
 
-@app.route('/audio')
-def audio_alias_to_mp3():
-    # Serve MP3 on /audio for simplicity/compat
-    alsa_in = AUDIO_CONFIG.get("audio_in", {}).get("alsa_device")
-    proc = start_ffmpeg_rx_stream_mp3(alsa_in)
-    if not proc:
-        return Response("Audio not available\n", status=503, mimetype="text/plain")
-    resp = Response(stream_with_context(_stream_proc_stdout(proc)), mimetype="audio/mpeg")
-    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
-    resp.headers["Pragma"] = "no-cache"
-    return resp
-
-@app.route('/audio.mp3')
-def audio_mp3():
-    # MP3 stream
-    alsa_in = AUDIO_CONFIG.get("audio_in", {}).get("alsa_device")
-    proc = start_ffmpeg_rx_stream_mp3(alsa_in)
-    if not proc:
-        return Response("Audio not available\n", status=503, mimetype="text/plain")
-    resp = Response(stream_with_context(_stream_proc_stdout(proc)), mimetype="audio/mpeg")
-    resp.headers["Cache-Control"] = "no-store, no-cache, must-revalidate, max-age=0"
-    resp.headers["Pragma"] = "no-cache"
-    return resp
 
 if __name__ == '__main__':
     # Start background updater thread
