@@ -481,11 +481,12 @@ class FfmpegPcmTrack(MediaStreamTrack):
         self._buffer = bytearray()
 
     async def recv(self) -> av.AudioFrame:
-        # Read exactly one frame worth of bytes (blocking in thread pool)
+        # Fill buffer to one frame (1920 bytes)
         while len(self._buffer) < self._frame_bytes:
             if self._closed:
                 return self._silence_frame()
-            chunk = await asyncio.get_event_loop().run_in_executor(None, self._read_exact, self._frame_bytes - len(self._buffer))
+            need = self._frame_bytes - len(self._buffer)
+            chunk = await asyncio.get_event_loop().run_in_executor(None, self._read_exact, need)
             if not chunk:
                 return self._silence_frame()
             self._buffer.extend(chunk)
@@ -495,7 +496,19 @@ class FfmpegPcmTrack(MediaStreamTrack):
 
         frame = av.AudioFrame(format="s16", layout="mono", samples=self.samples_per_frame)
         frame.planes[0].update(data)
-        # IMPORTANT: let aiortc timestamp the frame
+        frame.sample_rate = 48000  # provide encoder the rate; let aiortc timestamp
+        return frame
+
+    def _read_exact(self, n: int) -> bytes:
+        try:
+            return self._proc.stdout.read(n)
+        except Exception:
+            return b""
+
+    def _silence_frame(self) -> av.AudioFrame:
+        frame = av.AudioFrame(format="s16", layout="mono", samples=self.samples_per_frame)
+        frame.planes[0].update(b"\x00" * self._frame_bytes)
+        frame.sample_rate = 48000
         return frame
 
     def _read_exact(self, n: int) -> bytes:
@@ -561,6 +574,7 @@ class Tone1kTrack(MediaStreamTrack):
     async def recv(self) -> av.AudioFrame:
         if self._closed:
             return self._silence_frame()
+
         buf = bytearray()
         freq = 1000.0
         two_pi_over_sr = 2.0 * math.pi / self.sample_rate
@@ -570,14 +584,16 @@ class Tone1kTrack(MediaStreamTrack):
             self.phase += two_pi_over_sr * freq
             if self.phase >= 2.0 * math.pi:
                 self.phase -= 2.0 * math.pi
+
         frame = av.AudioFrame(format="s16", layout="mono", samples=self.samples_per_frame)
         frame.planes[0].update(bytes(buf))
-        # Let aiortc timestamp this frame (no pts/time_base set here)
+        frame.sample_rate = 48000  # provide encoder the rate; let aiortc timestamp
         return frame
 
     def _silence_frame(self) -> av.AudioFrame:
         frame = av.AudioFrame(format="s16", layout="mono", samples=self.samples_per_frame)
         frame.planes[0].update(b"\x00" * (self.samples_per_frame * 2))
+        frame.sample_rate = 48000
         return frame
 
     def stop(self) -> None:
