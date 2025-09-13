@@ -876,59 +876,59 @@ def _log_flrig_methods_once(substr: str = "band"):
     _BAND_METHODS_LOGGED = True
 
 @socketio.on('band_select')
-      def handle_band_select(data):
-          """
-          Switch to a General-class phone 'center' for the selected band:
-          sets mode (LSB/USB/AM) and frequency (Hz).
-          Skips 160m (1.8) and 30m (10) as requested.
-          GEN goes to 830 kHz AM broadcast.
-          """
-          band = str(data.get('band', '')).strip()
-          if not band:
-              emit('band_selected', {'success': False, 'error': 'Missing band'})
-              return
+def handle_band_select(data):
+    """
+    Switch to a General-class phone 'center' for the selected band:
+    sets mode (LSB/USB/AM) and frequency (Hz).
+    Skips 160m (1.8) and 30m (10) as requested.
+    GEN goes to 830 kHz AM broadcast.
+    """
+    band = str(data.get('band', '')).strip()
+    if not band:
+        emit('band_selected', {'success': False, 'error': 'Missing band'})
+        return
 
-          # Requested mappings
-          centers = {
-              # "1.8":  {"freq": 1900000,  "mode": "LSB"},  # skipped per user
-              "3.5":   {"freq": 3900000,   "mode": "LSB"},
-              "7":     {"freq": 7237500,   "mode": "LSB"},
-              # "10":  {"freq": 10136000,  "mode": "USB"},  # skipped (no phone)
-              "14":    {"freq": 14300000,  "mode": "USB"},
-              "18":    {"freq": 18139000,  "mode": "USB"},
-              "21":    {"freq": 21362500,  "mode": "USB"},
-              "24":    {"freq": 24960000,  "mode": "USB"},
-              "28":    {"freq": 28400000,  "mode": "USB"},
-              "50":    {"freq": 50200000,  "mode": "USB"},
-              "GEN":   {"freq": 830000,    "mode": "AM"},   # 830 kHz AM broadcast
-          }
+    # Requested mappings
+    centers = {
+        # "1.8":  {"freq": 1900000,  "mode": "LSB"},  # skipped per user
+        "3.5":   {"freq": 3900000,   "mode": "LSB"},
+        "7":     {"freq": 7237500,   "mode": "LSB"},
+        # "10":  {"freq": 10136000,  "mode": "USB"},  # skipped (no phone)
+        "14":    {"freq": 14287500,  "mode": "USB"},
+        "18":    {"freq": 18139000,  "mode": "USB"},
+        "21":    {"freq": 21362500,  "mode": "USB"},
+        "24":    {"freq": 24960000,  "mode": "USB"},
+        "28":    {"freq": 28400000,  "mode": "USB"},
+        "50":    {"freq": 50200000,  "mode": "USB"},
+        "GEN":   {"freq": 830000,    "mode": "AM"},   # 830 kHz AM broadcast
+    }
 
-          cfg = centers.get(band)
-          if not cfg:
-              emit('band_selected', {'success': False, 'error': f"No mapping defined for band '{band}'"})
-              return
+    cfg = centers.get(band)
+    if not cfg:
+        emit('band_selected', {'success': False, 'error': f"No mapping defined for band '{band}'"})
+        return
 
-          try:
-              # Set mode then tune frequency
-              try:
-                  flrig_remote.client.rig.set_mode(cfg["mode"])
-              except Exception as e:
-                  # Try uppercase fallback only
-                  try:
-                      flrig_remote.client.rig.set_mode(str(cfg["mode"]).upper())
-                  except Exception:
-                      emit('band_selected', {'success': False, 'error': f"set_mode failed: {e}", 'band': band})
-                      return
+    try:
+        # Set mode then tune frequency
+        try:
+            flrig_remote.client.rig.set_mode(cfg["mode"])
+        except Exception as e:
+            # Try uppercase fallback only
+            try:
+                flrig_remote.client.rig.set_mode(str(cfg["mode"]).upper())
+            except Exception:
+                emit('band_selected', {'success': False, 'error': f"set_mode failed: {e}", 'band': band})
+                return
 
-              ok, msg = flrig_remote.set_frequency(cfg["freq"])
-              emit('band_selected', {
-                  'success': ok,
-                  'error': None if ok else msg,
-                  'band': band,
-                  'frequency_hz': cfg["freq"]
-              })
-          except Exception as e:
-              emit('band_selected', {'success': False, 'error': str(e), 'band': band})
+        ok, msg = flrig_remote.set_frequency(cfg["freq"])
+        emit('band_selected', {
+            'success': ok,
+            'error': None if ok else msg,
+            'band': band,
+            'frequency_hz': cfg["freq"]
+        })
+    except Exception as e:
+        emit('band_selected', {'success': False, 'error': str(e), 'band': band})
 
 @socketio.on('frequency_change')
 def handle_frequency_change(data):
