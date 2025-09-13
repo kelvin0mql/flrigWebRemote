@@ -625,34 +625,31 @@ async def _create_pc_with_rig_rx():
 
     return pc
 
-     async def _handle_webrtc_offer(offer: RTCSessionDescription):
-         """
-         Create PC, prime audio (warm-up), set remote, create answer, wait ICE.
-         """
-         pc = await _create_pc_with_rig_rx()
-
-         # Warm up: pull a few frames so capture/resampler are primed before answering
-         for _ in range(6):
-             for sender in pc.getSenders():
-                 tr = sender.track
-                 if tr and hasattr(tr, "recv"):
-                     try:
-                         await tr.recv()  # discard warm-up frames
-                     except Exception:
-                         pass
-             await asyncio.sleep(0)
-
-         # Tiny settle delay helps first-connect on Safari/iOS
-         await asyncio.sleep(0.03)
-
-         await pc.setRemoteDescription(offer)
-         answer = await pc.createAnswer()
-         await pc.setLocalDescription(answer)
-         await _wait_for_ice_complete(pc)
-         return {
-             "sdp": pc.localDescription.sdp,
-             "type": pc.localDescription.type
-         }
+async def _handle_webrtc_offer(offer: RTCSessionDescription):
+    """
+    Create PC, prime audio (warm-up), set remote, create answer, wait ICE.
+    """
+    pc = await _create_pc_with_rig_rx()
+    # Warm up: pull a few frames so capture/resampler are primed before answering
+    for _ in range(6):
+        for sender in pc.getSenders():
+            tr = sender.track
+            if tr and hasattr(tr, "recv"):
+                try:
+                    await tr.recv()  # discard warm-up frames
+                except Exception:
+                    pass
+        await asyncio.sleep(0)
+    # Tiny settle delay helps first-connect on Safari/iOS
+    await asyncio.sleep(0.03)
+    await pc.setRemoteDescription(offer)
+    answer = await pc.createAnswer()
+    await pc.setLocalDescription(answer)
+    await _wait_for_ice_complete(pc)
+    return {
+        "sdp": pc.localDescription.sdp,
+        "type": pc.localDescription.type
+    }
 
 # -------------------- Flask routes --------------------
 
