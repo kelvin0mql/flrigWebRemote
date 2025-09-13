@@ -464,14 +464,21 @@ class FfmpegPcmTrack(MediaStreamTrack):
         self._cmd = [
             "ffmpeg",
             "-hide_banner", "-loglevel", "warning",
+            # Input: ALSA
             "-f", "alsa",
             "-ac", "1",
-            "-ar", str(self.sample_rate),
+            # Let ALSA run its native rate; we will resample on output
             "-i", alsa_device,
-            "-af", f"asetnsamples=n={self.samples_per_frame}:p=0,aresample={self.sample_rate}:resampler=soxr",
+            # Resample to SAMPLE_RATE first, then normalize to exact FRAME_SAMPLES blocks
+            "-af", f"aresample={self.sample_rate}:resampler=soxr,asetnsamples=n={self.samples_per_frame}:p=0",
+            # Output: raw PCM mono s16 at SAMPLE_RATE
+            "-acodec", "pcm_s16le",
+            "-ac", "1",
+            "-ar", str(self.sample_rate),
             "-f", "s16le",
             "-"
         ]
+
         self._proc = subprocess.Popen(
             self._cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0
         )
