@@ -445,7 +445,7 @@ class AvAlsaTrack(MediaStreamTrack):
 
     def __init__(self, alsa_device: str):
         super().__init__()
-        # Use provided device as-is (plughw: is okay; often more tolerant than hw:)
+        # Use the configured ALSA device as-is (plughw:... is fine)
         self._device = alsa_device
 
         self.sample_rate = 48000
@@ -455,36 +455,37 @@ class AvAlsaTrack(MediaStreamTrack):
         self._pts = 0
         self._closed = False
 
-        # Open ALSA input via PyAV. Let device run native; resampler converts to 48k.
+        # Force ALSA to 48 kHz mono at the device layer; increase queue for robustness
         self._container = av.open(
             file=self._device,
             format="alsa",
             mode="r",
             options={
                 "ac": "1",
-                "thread_queue_size": "2048",
+                "ar": "48000",
+                "thread_queue_size": "4096",
             },
         )
         self._in_stream = next(s for s in self._container.streams if s.type == "audio")
-
-        # Resample to 48k mono s16
+        # Resample to 48 kHz mono s16 (no-op if already 48k, but keeps timing sane)
         self._resampler = AudioResampler(format="s16", layout="mono", rate=self.sample_rate)
 
         self._pending = b""
 
     async def recv(self) -> av.AudioFrame:
-        # Prebuffer a few frames to reduce capture starvation (xruns)
+        # Prebuffer 4 frames to reduce capture starvation and stabilize rate
         bytes_per_frame = self.samples_per_frame * 2  # s16 mono
-        target_buffer = bytes_per_frame * 3
+        target_buffer = bytes_per_frame * 4
 
         while len(self._pending) < target_buffer:
             if self._closed:
                 return self._silence_frame()
             frame = await asyncio.get_event_loop().run_in_executor(None, self._read_one_frame)
             if frame is None:
+                # ALSA hiccup: keep clocking with silence for 20 ms
                 return self._silence_frame()
             for out in self._resampler.resample(frame):
-                # NOTE: to_bytes() is deprecated; using bytes(plane) avoids the warning
+                # Use bytes(plane) to avoid deprecated to_bytes()
                 buf = bytes(out.planes[0])
                 if buf:
                     self._pending += buf
@@ -624,31 +625,34 @@ async def _create_pc_with_rig_rx():
 
     return pc
 
-async def _handle_webrtc_offer(offer: RTCSessionDescription):
-    """
-    Create PC, prime audio (warm-up), set remote, create answer, wait ICE.
-    """
-    pc = await _create_pc_with_rig_rx()
+     async def _handle_webrtc_offer(offer: RTCSessionDescription):
+         """
+         Create PC, prime audio (warm-up), set remote, create answer, wait ICE.
+         """
+         pc = await _create_pc_with_rig_rx()
 
-    # Warm up: pull a few frames so capture/resampler are primed before answering
-    for _ in range(5):
-        for sender in pc.getSenders():
-            tr = sender.track
-            if tr and hasattr(tr, "recv"):
-                try:
-                    await tr.recv()  # discard warm-up frames
-                except Exception:
-                    pass
-        await asyncio.sleep(0)
+         # Warm up: pull a few frames so capture/resampler are primed before answering
+         for _ in range(6):
+             for sender in pc.getSenders():
+                 tr = sender.track
+                 if tr and hasattr(tr, "recv"):
+                     try:
+                         await tr.recv()  # discard warm-up frames
+                     except Exception:
+                         pass
+             await asyncio.sleep(0)
 
-    await pc.setRemoteDescription(offer)
-    answer = await pc.createAnswer()
-    await pc.setLocalDescription(answer)
-    await _wait_for_ice_complete(pc)
-    return {
-        "sdp": pc.localDescription.sdp,
-        "type": pc.localDescription.type
-    }
+         # Tiny settle delay helps first-connect on Safari/iOS
+         await asyncio.sleep(0.03)
+
+         await pc.setRemoteDescription(offer)
+         answer = await pc.createAnswer()
+         await pc.setLocalDescription(answer)
+         await _wait_for_ice_complete(pc)
+         return {
+             "sdp": pc.localDescription.sdp,
+             "type": pc.localDescription.type
+         }
 
 # -------------------- Flask routes --------------------
 
