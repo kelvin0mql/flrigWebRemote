@@ -283,6 +283,10 @@ AUDIO_CONFIG = ensure_audio_config(force_reconfigure=FORCE_RECONFIG)
 # Optional: set USE_TONE=1 in the environment to send a 1 kHz test tone
 USE_TONE = (os.environ.get("USE_TONE", "0") == "1")
 
+# Audio sample rate for the whole media path (change to 48000 if needed)
+SAMPLE_RATE = 24000
+FRAME_SAMPLES = 480  # 20 ms at 24 kHz
+
 class FlrigWebRemote:
     def __init__(self):
         self.client = None
@@ -441,15 +445,15 @@ _loop_thread.start()
 class FfmpegPcmTrack(MediaStreamTrack):
     """
     Capture from ALSA via ffmpeg, resample to 48 kHz mono s16, and emit exact
-    20 ms (960-sample) frames with correct timestamps.
+    20 ms (960-sample or 280-sample, depending) frames with correct timestamps.
     """
     kind = "audio"
 
     def __init__(self, alsa_device: str):
         super().__init__()
-        self.sample_rate = 48000
+        self.sample_rate = SAMPLE_RATE
         self.channels = 1
-        self.samples_per_frame = 960
+        self.samples_per_frame = FRAME_SAMPLES
         self._frame_bytes = self.samples_per_frame * self.channels * 2  # s16 mono
         self._closed = False
         self._buffer = bytearray()
@@ -462,9 +466,9 @@ class FfmpegPcmTrack(MediaStreamTrack):
             "-hide_banner", "-loglevel", "warning",
             "-f", "alsa",
             "-ac", "1",
-            "-ar", "48000",
+            "-ar", "SAMPLE_RATE",
             "-i", alsa_device,
-            "-af", "asetnsamples=n=960:p=0,aresample=48000:resampler=soxr",
+            "-af", "asetnsamples=n=FRAME_SAMPLES:p=0,aresample=SAMPLE_RATE:resampler=soxr",
             "-f", "s16le",
             "-"
         ]
@@ -488,7 +492,7 @@ class FfmpegPcmTrack(MediaStreamTrack):
 
         frame = av.AudioFrame(format="s16", layout="mono", samples=self.samples_per_frame)
         frame.planes[0].update(data)
-        frame.sample_rate = 48000
+        frame.sample_rate = SAMPLE_RATE
         frame.time_base = self._time_base
         frame.pts = self._pts
         self._pts += self.samples_per_frame
@@ -503,7 +507,7 @@ class FfmpegPcmTrack(MediaStreamTrack):
     def _silence_frame(self) -> av.AudioFrame:
         frame = av.AudioFrame(format="s16", layout="mono", samples=self.samples_per_frame)
         frame.planes[0].update(b"\x00" * self._frame_bytes)
-        frame.sample_rate = 48000
+        frame.sample_rate = SAMPLE_RATE
         frame.time_base = self._time_base
         frame.pts = self._pts
         self._pts += self.samples_per_frame
@@ -543,14 +547,14 @@ class FfmpegPcmTrack(MediaStreamTrack):
 
 class Tone1kTrack(MediaStreamTrack):
     """
-    Generate a 1 kHz sine at 48 kHz mono, framed at exactly 20 ms (960 samples).
+    Generate a 1 kHz sine at 48 (or maybe 24) kHz mono, framed at exactly 20 ms (960 (or maybe 280) samples).
     """
     kind = "audio"
 
     def __init__(self):
         super().__init__()
-        self.sample_rate = 48000
-        self.samples_per_frame = 960
+        self.sample_rate = SAMPLE_RATE
+        self.samples_per_frame = FRAME_SAMPLES
         self.phase = 0.0
         self._closed = False
         # add timestamp state to match FfmpegPcmTrack
@@ -573,7 +577,7 @@ class Tone1kTrack(MediaStreamTrack):
 
         frame = av.AudioFrame(format="s16", layout="mono", samples=self.samples_per_frame)
         frame.planes[0].update(bytes(buf))
-        frame.sample_rate = 48000
+        frame.sample_rate = SAMPLE_RATE
         frame.time_base = self._time_base
         frame.pts = self._pts
         self._pts += self.samples_per_frame
@@ -582,7 +586,7 @@ class Tone1kTrack(MediaStreamTrack):
     def _silence_frame(self) -> av.AudioFrame:
         frame = av.AudioFrame(format="s16", layout="mono", samples=self.samples_per_frame)
         frame.planes[0].update(b"\x00" * (self.samples_per_frame * 2))
-        frame.sample_rate = 48000
+        frame.sample_rate = SAMPLE_RATE
         frame.time_base = self._time_base
         frame.pts = self._pts
         self._pts += self.samples_per_frame
