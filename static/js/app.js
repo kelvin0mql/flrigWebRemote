@@ -21,11 +21,10 @@ const volumeSlider = document.getElementById('volume-slider');
 const tuneBtn = document.getElementById('tune-btn');
 const pttBtn = document.getElementById('ptt-btn');
 
-// Live audio elements (may or may not exist depending on the page)
+// Live audio elements (WebRTC)
 const rxAudioEl = document.getElementById('rx-audio');
-// const audioToggleBtn = document.getElementById('audio-toggle'); // removed
-const listenWavBtn = document.getElementById('listen-wav');
-const listenMp3Btn = document.getElementById('listen-mp3');
+const connectAudioBtn = document.getElementById('connect-audio');
+const disconnectAudioBtn = document.getElementById('disconnect-audio');
 
 let currentStreamKind = null; // 'wav' | 'mp3' | null
 
@@ -50,18 +49,18 @@ function isListening() {
 }
 
 function updateListenButtons() {
-  if (!listenWavBtn || !listenMp3Btn) return;
-  // Repurpose UI: left button = Connect, right button = Disconnect
+  if (!connectAudioBtn || !disconnectAudioBtn) return;
+  // Audio control: Connect / Disconnect
   if (webrtcConnected) {
-    listenWavBtn.textContent = 'Connected (Opus)';
-    listenWavBtn.className = 'btn btn-secondary';
-    listenMp3Btn.textContent = 'Disconnect';
-    listenMp3Btn.className = 'btn btn-outline-danger';
+    connectAudioBtn.textContent = 'Connected (Opus)';
+    connectAudioBtn.className = 'btn btn-secondary';
+    disconnectAudioBtn.textContent = 'Disconnect';
+    disconnectAudioBtn.className = 'btn btn-outline-danger';
   } else {
-    listenWavBtn.textContent = 'Connect Audio';
-    listenWavBtn.className = 'btn btn-outline-secondary';
-    listenMp3Btn.textContent = 'Disconnect';
-    listenMp3Btn.className = 'btn btn-outline-secondary';
+    connectAudioBtn.textContent = 'Connect Audio';
+    connectAudioBtn.className = 'btn btn-outline-secondary';
+    disconnectAudioBtn.textContent = 'Disconnect';
+    disconnectAudioBtn.className = 'btn btn-outline-secondary';
   }
 }
 
@@ -168,6 +167,10 @@ async function stopWebRTC() {
       pc.onicecandidate = null;
       try { pc.close(); } catch (_) {}
     }
+    // Ask server to tear down (releases ALSA immediately)
+    try {
+      await fetch('/api/webrtc/teardown', { method: 'POST' });
+    } catch (_) {}
   } finally {
     pc = null;
     webrtcConnected = false;
@@ -181,16 +184,16 @@ function startLiveAudioStream(kind) {
   console.log('[audio] legacy HTTP streaming disabled; using WebRTC');
 }
 
-// Wire up the two listen buttons
-if (listenWavBtn) {
-  listenWavBtn.addEventListener('click', () => {
+// Wire up audio connect/disconnect buttons
+if (connectAudioBtn) {
+  connectAudioBtn.addEventListener('click', () => {
     if (!webrtcConnected) {
       startWebRTC();
     }
   });
 }
-if (listenMp3Btn) {
-  listenMp3Btn.addEventListener('click', () => {
+if (disconnectAudioBtn) {
+  disconnectAudioBtn.addEventListener('click', () => {
     if (webrtcConnected) {
       stopWebRTC();
     }

@@ -10,14 +10,25 @@ import sys
 import subprocess
 import re
 import asyncio
+import logging
 
 # WebRTC / aiortc
 from aiortc import RTCPeerConnection, RTCSessionDescription
 from aiortc.contrib.media import MediaPlayer  # ALSA capture/playback via ffmpeg
 
+# --- Logging / debug mode ---
+DEBUG_MODE = ("--debug" in sys.argv)
+
+# Reduce noisy logs unless --debug is provided
+logging.basicConfig(level=logging.DEBUG if DEBUG_MODE else logging.INFO)
+logging.getLogger("werkzeug").setLevel(logging.DEBUG if DEBUG_MODE else logging.WARNING)
+logging.getLogger("engineio").setLevel(logging.DEBUG if DEBUG_MODE else logging.WARNING)
+logging.getLogger("socketio").setLevel(logging.DEBUG if DEBUG_MODE else logging.WARNING)
+
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'flrig-web-remote-secret'
-socketio = SocketIO(app, cors_allowed_origins="*")
+# Silence Socket.IO internal logging unless debug
+socketio = SocketIO(app, cors_allowed_origins="*", logger=DEBUG_MODE, engineio_logger=DEBUG_MODE)
 
 # flrig connection settings
 FLRIG_HOST = "localhost"  # Changed to localhost since running on same machine
@@ -415,6 +426,8 @@ flrig_remote = FlrigWebRemote()
 
 # --- WebRTC (aiortc) state and helpers ---
 pcs = set()
+# Track MediaPlayer per PC to ensure ALSA is released
+_pc_players = {}
 
 
 def _alsa_input_device():
@@ -422,22 +435,63 @@ def _alsa_input_device():
     return AUDIO_CONFIG.get("audio_in", {}).get("alsa_device")
 
 
+async def _cleanup_pc(pc: RTCPeerConnection):
+    """
+    Close a PeerConnection and stop any associated MediaPlayer to free ALSA.
+    """
+    try:
+        player = _pc_players.pop(pc, None)
+        if player:
+            try:
+                player.audio and player.audio.stop()
+            except Exception:
+                pass
+            try:
+                await player.stop()
+            except Exception:
+                pass
+    except Exception:
+        pass
+    try:
+        await pc.close()
+    except Exception:
+        pass
+
+
+async def _close_all_pcs():
+    """
+    Close all existing PC sessions to guarantee ALSA is not held open.
+    """
+    to_close = list(pcs)
+    for p in to_close:
+        try:
+            pcs.discard(p)
+            await _cleanup_pc(p)
+        except Exception:
+            pass
+
+
 async def _create_pc_with_rig_rx():
     """
     Create a PeerConnection that sends rig RX audio (from ALSA) to the client.
+    Only one active PC is allowed at a time to avoid ALSA 'busy' errors.
     """
+    # Ensure single active session
+    await _close_all_pcs()
+
     pc = RTCPeerConnection()
     pcs.add(pc)
 
     @pc.on("connectionstatechange")
-    def on_connectionstatechange():
+    async def on_connectionstatechange():
         print("WebRTC connection state:", pc.connectionState)
-        if pc.connectionState in ("failed", "closed", "disconnected"):
-            try:
-                pcs.discard(pc)
-                asyncio.ensure_future(_cleanup_pc(pc))
-            except Exception:
-                pass
+        if pc.connectionState in ("failed", "closed"):
+            pcs.discard(pc)
+            await _cleanup_pc(pc)
+        elif pc.connectionState == "disconnected":
+            # Gracefully cleanup on long disconnects
+            pcs.discard(pc)
+            await _cleanup_pc(pc)
 
     # Add rig RX track (ALSA capture via ffmpeg/MediaPlayer)
     alsa_in = _alsa_input_device()
@@ -453,21 +507,18 @@ async def _create_pc_with_rig_rx():
                 "ar": "16000",
                 # Optional filtering similar to your ffmpeg chain:
                 # "af": "highpass=f=300,lowpass=f=3000"
+                # Tighter probing to reduce startup latency:
+                "probesize": "32",
+                "analyzeduration": "0",
             },
         )
         if player.audio:
             pc.addTrack(player.audio)
+            _pc_players[pc] = player
         else:
             print("Failed to create audio track from ALSA input.")
 
     return pc
-
-
-async def _cleanup_pc(pc: RTCPeerConnection):
-    try:
-        await pc.close()
-    except Exception:
-        pass
 
 
 # -------------------- Flask routes --------------------
@@ -525,13 +576,14 @@ def handle_frequency_change(data):
     emit('frequency_changed', {'success': success, 'error': message if not success else None})
 
 
-# ------------- Audio: replaced HTTP streaming with WebRTC (Opus) -------------
+# ------------- Audio: WebRTC (Opus) -------------
 
 @app.post('/api/webrtc/offer')
 def api_webrtc_offer():
     """
     Signaling endpoint: accepts an SDP offer, returns an SDP answer.
     Publishes the rig RX ALSA capture as an Opus track to the browser.
+    Enforces single active session to avoid ALSA 'busy'.
     """
     try:
         payload = request.get_json(force=True, silent=False)
@@ -542,7 +594,7 @@ def api_webrtc_offer():
     async def handle():
         pc = await _create_pc_with_rig_rx()
         await pc.setRemoteDescription(offer)
-        # Create answer; Opus will be negotiated automatically by the browser and aiortc
+        # Create answer; Opus will be negotiated automatically
         answer = await pc.createAnswer()
         await pc.setLocalDescription(answer)
         return {
@@ -562,7 +614,20 @@ def api_webrtc_offer():
         return jsonify({"error": f"webrtc failed: {e}"}), 500
 
 
-# NOTE: Legacy HTTP audio endpoints (/audio.wav, /audio, /audio.mp3) have been removed.
+@app.post('/api/webrtc/teardown')
+def api_webrtc_teardown():
+    """
+    Optional explicit teardown endpoint invoked by the client on 'Disconnect'.
+    Ensures ALSA is released immediately.
+    """
+    try:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        loop.run_until_complete(_close_all_pcs())
+        loop.close()
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
 if __name__ == '__main__':
@@ -571,4 +636,4 @@ if __name__ == '__main__':
     update_thread.start()
 
     # Run the Flask-SocketIO app
-    socketio.run(app, host='0.0.0.0', port=5000, debug=True)
+    socketio.run(app, host='0.0.0.0', port=5000, debug=DEBUG_MODE)
