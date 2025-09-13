@@ -75,6 +75,19 @@ function wireBandButtons() {
   });
 }
 
+// Wire Extras (A) user buttons -> emit user_button with cmd index (1..8)
+function wireExtrasA() {
+  const container = document.querySelector('.extras-a');
+  if (!container) return;
+  container.querySelectorAll('.extras-a-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const cmd = parseInt(btn.getAttribute('data-cmd'), 10);
+      if (!Number.isInteger(cmd)) return;
+      socket.emit('user_button', { cmd });
+    });
+  });
+}
+
 function attachAudioDebug() {
   if (!rxAudioEl || rxAudioEl._dbgAttached) return;
   rxAudioEl._dbgAttached = true;
