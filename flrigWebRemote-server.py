@@ -31,8 +31,8 @@ app.config['SECRET_KEY'] = 'flrig-web-remote-secret'
 socketio = SocketIO(app, cors_allowed_origins="*", logger=DEBUG_MODE, engineio_logger=DEBUG_MODE)
 
 # flrig connection settings
-FLRIG_HOST = "localhost"  # Changed to localhost since running on same machine
-FLRIG_PORT = 12345        # Default flrig XML-RPC port
+FLRIG_HOST = "localhost"
+FLRIG_PORT = 12345
 server_url = f"http://{FLRIG_HOST}:{FLRIG_PORT}/RPC2"
 
 # --- Audio configuration (ALSA only) ---
@@ -426,14 +426,19 @@ flrig_remote = FlrigWebRemote()
 
 # --- WebRTC (aiortc) state and helpers ---
 pcs = set()
-# Track MediaPlayer per PC to ensure ALSA is released
 _pc_players = {}
 
+# Single, long-lived asyncio loop for all aiortc work
+_aiortc_loop = asyncio.new_event_loop()
+def _run_loop(loop):
+    asyncio.set_event_loop(loop)
+    loop.run_forever()
+_loop_thread = threading.Thread(target=_run_loop, args=(_aiortc_loop,), daemon=True)
+_loop_thread.start()
 
 def _alsa_input_device():
     """Return ALSA input device string like 'plughw:X,Y' or None."""
     return AUDIO_CONFIG.get("audio_in", {}).get("alsa_device")
-
 
 async def _cleanup_pc(pc: RTCPeerConnection):
     """
@@ -457,7 +462,6 @@ async def _cleanup_pc(pc: RTCPeerConnection):
     except Exception:
         pass
 
-
 async def _close_all_pcs():
     """
     Close all existing PC sessions to guarantee ALSA is not held open.
@@ -470,6 +474,25 @@ async def _close_all_pcs():
         except Exception:
             pass
 
+async def _wait_for_ice_complete(pc: RTCPeerConnection, timeout: float = 5.0):
+    """
+    Wait for ICE gathering to complete so the SDP answer includes candidates (non-trickle).
+    """
+    if pc.iceGatheringState == "complete":
+        return
+    done = asyncio.Event()
+    @pc.on("icegatheringstatechange")
+    def _on_ice_state_change():
+        if pc.iceGatheringState == "complete":
+            try:
+                done.set()
+            except Exception:
+                pass
+    try:
+        await asyncio.wait_for(done.wait(), timeout=timeout)
+    except asyncio.TimeoutError:
+        # Proceed anyway; host candidates may be enough on LAN
+        pass
 
 async def _create_pc_with_rig_rx():
     """
@@ -485,11 +508,7 @@ async def _create_pc_with_rig_rx():
     @pc.on("connectionstatechange")
     async def on_connectionstatechange():
         print("WebRTC connection state:", pc.connectionState)
-        if pc.connectionState in ("failed", "closed"):
-            pcs.discard(pc)
-            await _cleanup_pc(pc)
-        elif pc.connectionState == "disconnected":
-            # Gracefully cleanup on long disconnects
+        if pc.connectionState in ("failed", "closed", "disconnected"):
             pcs.discard(pc)
             await _cleanup_pc(pc)
 
@@ -498,16 +517,13 @@ async def _create_pc_with_rig_rx():
     if not alsa_in:
         print("No ALSA input configured; cannot provide WebRTC audio.")
     else:
-        # Capture mono 16kHz for conversational quality/latency
         player = MediaPlayer(
             alsa_in,
             format="alsa",
             options={
                 "ac": "1",
                 "ar": "16000",
-                # Optional filtering similar to your ffmpeg chain:
-                # "af": "highpass=f=300,lowpass=f=3000"
-                # Tighter probing to reduce startup latency:
+                # "af": "highpass=f=300,lowpass=f=3000",  # optional
                 "probesize": "32",
                 "analyzeduration": "0",
             },
@@ -520,6 +536,20 @@ async def _create_pc_with_rig_rx():
 
     return pc
 
+async def _handle_webrtc_offer(offer: RTCSessionDescription):
+    """
+    Full async path to create PC, set remote, create answer, and wait for ICE.
+    Returns a dict with SDP answer.
+    """
+    pc = await _create_pc_with_rig_rx()
+    await pc.setRemoteDescription(offer)
+    answer = await pc.createAnswer()
+    await pc.setLocalDescription(answer)
+    await _wait_for_ice_complete(pc)
+    return {
+        "sdp": pc.localDescription.sdp,
+        "type": pc.localDescription.type
+    }
 
 # -------------------- Flask routes --------------------
 
@@ -528,53 +558,42 @@ def index():
     """Main page."""
     return render_template('index.html')
 
-
 @app.route('/api/status')
 def api_status():
     """API endpoint to get current status."""
     return jsonify(flrig_remote.current_data)
-
 
 def background_updater():
     """Background thread to update flrig data and emit to clients."""
     while True:
         flrig_remote.update_data()
         socketio.emit('status_update', flrig_remote.current_data)
-        time.sleep(2)  # Update every 2 seconds
-
+        time.sleep(2)
 
 @socketio.on('connect')
 def handle_connect():
     print('Client connected')
     emit('status_update', flrig_remote.current_data)
 
-
 @socketio.on('disconnect')
 def handle_disconnect():
     print('Client disconnected')
 
-
 @socketio.on('ptt_control')
 def handle_ptt_control(data):
-    """Handle PTT control requests."""
     success, message = flrig_remote.ptt_control(data['action'])
     emit('ptt_response', {'success': success, 'error': message if not success else None})
 
-
 @socketio.on('tune_control')
 def handle_tune_control(data):
-    """Handle Tune control requests."""
     success, message = flrig_remote.tune_control(data['action'])
     emit('tune_response', {'success': success, 'error': message if not success else None})
 
-
 @socketio.on('frequency_change')
 def handle_frequency_change(data):
-    """Handle frequency change requests."""
     freq_hz = data.get('frequency')
     success, message = flrig_remote.set_frequency(freq_hz)
     emit('frequency_changed', {'success': success, 'error': message if not success else None})
-
 
 # ------------- Audio: WebRTC (Opus) -------------
 
@@ -582,8 +601,7 @@ def handle_frequency_change(data):
 def api_webrtc_offer():
     """
     Signaling endpoint: accepts an SDP offer, returns an SDP answer.
-    Publishes the rig RX ALSA capture as an Opus track to the browser.
-    Enforces single active session to avoid ALSA 'busy'.
+    Uses a long-lived asyncio loop and waits for ICE completion.
     """
     try:
         payload = request.get_json(force=True, silent=False)
@@ -591,44 +609,25 @@ def api_webrtc_offer():
     except Exception as e:
         return jsonify({"error": f"invalid offer: {e}"}), 400
 
-    async def handle():
-        pc = await _create_pc_with_rig_rx()
-        await pc.setRemoteDescription(offer)
-        # Create answer; Opus will be negotiated automatically
-        answer = await pc.createAnswer()
-        await pc.setLocalDescription(answer)
-        return {
-            "sdp": pc.localDescription.sdp,
-            "type": pc.localDescription.type
-        }
-
-    # Run the coroutine in a dedicated event loop for this request
     try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        result = loop.run_until_complete(handle())
-        loop.run_until_complete(asyncio.sleep(0))  # yield once
-        loop.close()
+        fut = asyncio.run_coroutine_threadsafe(_handle_webrtc_offer(offer), _aiortc_loop)
+        result = fut.result(timeout=10)
         return jsonify(result)
     except Exception as e:
         return jsonify({"error": f"webrtc failed: {e}"}), 500
 
-
 @app.post('/api/webrtc/teardown')
 def api_webrtc_teardown():
     """
-    Optional explicit teardown endpoint invoked by the client on 'Disconnect'.
+    Explicit teardown endpoint invoked by the client on 'Disconnect'.
     Ensures ALSA is released immediately.
     """
     try:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        loop.run_until_complete(_close_all_pcs())
-        loop.close()
+        fut = asyncio.run_coroutine_threadsafe(_close_all_pcs(), _aiortc_loop)
+        fut.result(timeout=5)
         return jsonify({"ok": True})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
-
 
 if __name__ == '__main__':
     # Start background updater thread
