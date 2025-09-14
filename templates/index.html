@@ -72,6 +72,7 @@
                 <div class="d-inline-flex align-items-center gap-2">
                     <button id="connect-audio" class="btn btn-outline-secondary">Connect Audio</button>
                     <button id="disconnect-audio" class="btn btn-outline-secondary">Disconnect</button>
+                    <button id="enable-mic" class="btn btn-outline-secondary">Mic</button>
                 </div>
             </div>
 
@@ -148,18 +149,6 @@
                 </div>
             </div>
         </div>
-    </div>
-</div>
-
-<!-- RX Audio (WebRTC; connect/disconnect) -->
-<div class="text-center mb-4">
-    <audio id="rx-audio" playsinline preload="none" style="width:1px;height:1px;opacity:0;pointer-events:none;"></audio>
-    <div class="d-inline-flex align-items-center gap-2">
-        <button id="connect-audio" class="btn btn-outline-secondary">Connect Audio</button>
-        <button id="disconnect-audio" class="btn btn-outline-secondary">Disconnect</button>
-        <!-- Add mic permission button -->
-        <button id="enable-mic" class="btn btn-outline-primary">Enable Microphone</button>
-        <span id="mic-permission-status" class="text-muted ms-2"></span>
     </div>
 </div>
 <script src="https://cdn.socket.io/4.5.0/socket.io.min.js"></script>
