@@ -975,5 +975,15 @@ if __name__ == '__main__':
     update_thread = threading.Thread(target=background_updater, daemon=True)
     update_thread.start()
 
+    # HTTPS auto-detection (no env vars): look for certs/server/server.crt and server.key
+    CERT_DEFAULT = os.path.join(SCRIPT_DIR, "certs", "server", "server.crt")
+    KEY_DEFAULT  = os.path.join(SCRIPT_DIR, "certs", "server", "server.key")
+    ssl_ctx = None
+    if os.path.exists(CERT_DEFAULT) and os.path.exists(KEY_DEFAULT):
+        ssl_ctx = (CERT_DEFAULT, KEY_DEFAULT)
+        print(f"HTTPS enabled: cert={CERT_DEFAULT}, key={KEY_DEFAULT}")
+    else:
+        print("HTTPS disabled: cert/key not found (expected certs/server/server.crt and .key). Serving HTTP.")
+
     # Run the Flask-SocketIO app
-    socketio.run(app, host='0.0.0.0', port=5000, debug=DEBUG_MODE)
+    socketio.run(app, host='0.0.0.0', port=5000, debug=DEBUG_MODE, ssl_context=ssl_ctx)
