@@ -540,7 +540,7 @@ async function requestMicPermission() {
   }
 }
 
-// Wire the "Enable Microphone" button and set default status
+// Final DOM wiring: Mic button + restore UI wiring (listen buttons, band, extras)
 document.addEventListener('DOMContentLoaded', function() {
   const enableMicBtn = document.getElementById('enable-mic');
   if (enableMicBtn) {
@@ -548,4 +548,10 @@ document.addEventListener('DOMContentLoaded', function() {
       await requestMicPermission();
     });
   }
+  // Ensure Mic button reflects current state
+  updateMicButton();
+  // Restore the rest of the UI bindings
+  updateListenButtons();
+  wireBandButtons();
+  wireExtrasA();
 });
