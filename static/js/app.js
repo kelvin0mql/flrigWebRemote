@@ -497,15 +497,96 @@ document.addEventListener('DOMContentLoaded', function() {
   pttBtn.style.color = 'white';
 });
 
+// Helper to read mic permission state from the status element
+function isMicEnabled() {
+  const el = document.getElementById('mic-permission-status');
+  return !!(el && /enabled/i.test(el.textContent || ''));
+}
+
 // Initial load - fetch current status
 fetch('/api/status')
   .then(response => response.json())
   .then(data => updateDisplay(data))
   .catch(error => console.error('Error fetching initial status:', error));
 
+// Gate PTT: ensure mic permission before letting the existing PTT handler run
+document.addEventListener('DOMContentLoaded', function() {
+  if (!pttBtn) return;
+  pttBtn.addEventListener('click', function(e) {
+    const statusEl = document.getElementById('mic-permission-status');
+    const alreadyEnabled = statusEl && /enabled/i.test(statusEl.textContent || '');
+    if (alreadyEnabled) return; // allow existing handler to proceed
+
+    // Block the existing PTT click handler this time
+    e.preventDefault();
+    e.stopImmediatePropagation();
+
+    // Request permission, then trigger the original handler if granted
+    requestMicPermission().then(ok => {
+      if (ok && typeof togglePTT === 'function') {
+        try { togglePTT(); } catch (_) {}
+      }
+    });
+  }, true); // capture: run before the existing bubbling listener
+});
+
 // Initialize PTT button to RX state (green) after DOM is loaded
 document.addEventListener('DOMContentLoaded', function() {
   pttBtn.className = 'btn btn-success';
   pttBtn.style.backgroundColor = '#28a745';
   pttBtn.style.color = 'white';
+});
+
+// Mic permission helpers and wiring
+function updateMicStatus(text, ok) {
+  const el = document.getElementById('mic-permission-status');
+  if (!el) return;
+  el.textContent = text || '';
+  el.className = ok ? 'text-success ms-2' : 'text-muted ms-2';
+}
+
+async function requestMicPermission() {
+  try {
+    const constraints = {
+      audio: {
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false,
+        channelCount: 1,
+        sampleRate: 48000
+      },
+      video: false
+    };
+    const stream = await navigator.mediaDevices.getUserMedia(constraints);
+    // We only need the permission now; stop tracks immediately
+    stream.getTracks().forEach(t => { try { t.stop(); } catch (_) {} });
+    updateMicStatus('Microphone enabled', true);
+    return true;
+  } catch (err) {
+    console.warn('[mic] getUserMedia failed:', err);
+    updateMicStatus('Microphone permission denied', false);
+    return false;
+  }
+}
+
+function ensureMicBeforePTT() {
+  // If already granted in this session, short-circuit using status text
+  const el = document.getElementById('mic-permission-status');
+  if (el && /enabled/i.test(el.textContent || '')) return Promise.resolve(true);
+  return requestMicPermission();
+}
+
+// Wire the "Enable Microphone" button and set default status
+document.addEventListener('DOMContentLoaded', function() {
+  const enableMicBtn = document.getElementById('enable-mic');
+  if (enableMicBtn) {
+    enableMicBtn.addEventListener('click', async () => {
+      await requestMicPermission();
+    });
+  }
+  const statusEl = document.getElementById('mic-permission-status');
+  if (statusEl && !statusEl.textContent) {
+    statusEl.textContent = 'Microphone not enabled';
+    statusEl.className = 'text-muted ms-2';
+  }
 });
