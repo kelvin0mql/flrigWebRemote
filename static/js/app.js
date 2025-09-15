@@ -512,6 +512,32 @@ function updateMicButton() {
   }
 }
 
+async function requestMicPermission() {
+  try {
+    const constraints = {
+      audio: {
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false,
+        channelCount: 1,
+        sampleRate: 48000
+      },
+      video: false
+    };
+    const stream = await navigator.mediaDevices.getUserMedia(constraints);
+    // We only need the permission now; stop tracks immediately
+    stream.getTracks().forEach(t => { try { t.stop(); } catch (_) {} });
+    window.micEnabled = true;
+    updateMicButton();
+    return true;
+  } catch (err) {
+    console.warn('[mic] getUserMedia failed:', err);
+    window.micEnabled = false;
+    updateMicButton();
+    return false;
+  }
+}
+
 // Final DOM wiring: Mic button + restore UI wiring (listen buttons, band, extras)
 document.addEventListener('DOMContentLoaded', function() {
   const enableMicBtn = document.getElementById('enable-mic');
