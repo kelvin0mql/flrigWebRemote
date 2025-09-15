@@ -776,56 +776,6 @@ async def _create_pc_with_rig_rx():
             print(f"[webrtc] failed to start ArecordPcmTrack: {e}")
     return pc
 
-@app.post('/api/webrtc/offer')
-def api_webrtc_offer():
-    """
-    Signaling endpoint: accepts an SDP offer, returns an SDP answer.
-    Uses a long-lived asyncio loop and waits for ICE completion.
-    """
-    try:
-        payload = request.get_json(force=True, silent=False)
-        sdp_len = len(payload.get("sdp", "")) if isinstance(payload, dict) else -1
-        print(f"[webrtc] received offer, sdp bytes={sdp_len}")
-        offer = RTCSessionDescription(sdp=payload["sdp"], type=payload["type"])
-    except Exception as e:
-        return jsonify({"error": f"invalid offer: {e}"}), 400
-
-    try:
-        fut = asyncio.run_coroutine_threadsafe(_handle_webrtc_offer(offer), _aiortc_loop)
-        result = fut.result(timeout=10)
-        ans_len = len(result.get("sdp", "")) if isinstance(result, dict) else -1
-        print(f"[webrtc] sending answer, sdp bytes={ans_len}")
-        return jsonify(result)
-    except Exception as e:
-        print(f"[webrtc] offer handling failed: {e}")
-        return jsonify({"error": f"webrtc failed: {e}"}), 500
-
-async def _handle_webrtc_offer(offer: RTCSessionDescription):
-    """
-    Create PC, prime audio (warm-up), set remote, create answer, wait ICE.
-    """
-    pc = await _create_pc_with_rig_rx()
-    # Warm up: pull a few frames so capture/resampler are primed before answering
-    for _ in range(6):
-        for sender in pc.getSenders():
-            tr = sender.track
-            if tr and hasattr(tr, "recv"):
-                try:
-                    await tr.recv()  # discard warm-up frames
-                except Exception:
-                    pass
-        await asyncio.sleep(0)
-    # Tiny settle delay helps first-connect on Safari/iOS
-    await asyncio.sleep(0.03)
-    await pc.setRemoteDescription(offer)
-    answer = await pc.createAnswer()
-    await pc.setLocalDescription(answer)
-    await _wait_for_ice_complete(pc)
-    return {
-        "sdp": pc.localDescription.sdp,
-        "type": pc.localDescription.type
-    }
-
 # -------------------- Flask routes --------------------
 @app.route('/')
 def index():
@@ -1011,6 +961,8 @@ def api_webrtc_offer():
     """
     try:
         payload = request.get_json(force=True, silent=False)
+        sdp_len = len(payload.get("sdp", "")) if isinstance(payload, dict) else -1
+        print(f"[webrtc] received offer, sdp bytes={sdp_len}")
         offer = RTCSessionDescription(sdp=payload["sdp"], type=payload["type"])
     except Exception as e:
         return jsonify({"error": f"invalid offer: {e}"}), 400
@@ -1018,9 +970,38 @@ def api_webrtc_offer():
     try:
         fut = asyncio.run_coroutine_threadsafe(_handle_webrtc_offer(offer), _aiortc_loop)
         result = fut.result(timeout=10)
+        ans_len = len(result.get("sdp", "")) if isinstance(result, dict) else -1
+        print(f"[webrtc] sending answer, sdp bytes={ans_len}")
         return jsonify(result)
     except Exception as e:
+        print(f"[webrtc] offer handling failed: {e}")
         return jsonify({"error": f"webrtc failed: {e}"}), 500
+
+async def _handle_webrtc_offer(offer: RTCSessionDescription):
+    """
+    Create PC, prime audio (warm-up), set remote, create answer, wait ICE.
+    """
+    pc = await _create_pc_with_rig_rx()
+    # Warm up: pull a few frames so capture/resampler are primed before answering
+    for _ in range(6):
+        for sender in pc.getSenders():
+            tr = sender.track
+            if tr and hasattr(tr, "recv"):
+                try:
+                    await tr.recv()  # discard warm-up frames
+                except Exception:
+                    pass
+        await asyncio.sleep(0)
+    # Tiny settle delay helps first-connect on Safari/iOS
+    await asyncio.sleep(0.03)
+    await pc.setRemoteDescription(offer)
+    answer = await pc.createAnswer()
+    await pc.setLocalDescription(answer)
+    await _wait_for_ice_complete(pc)
+    return {
+        "sdp": pc.localDescription.sdp,
+        "type": pc.localDescription.type
+    }
 
 @app.post('/api/webrtc/teardown')
 def api_webrtc_teardown():
