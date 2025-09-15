@@ -294,7 +294,6 @@ class FlrigWebRemote:
             'frequency_a': 'Unknown',
             'frequency_b': 'Unknown',
             'mode': 'Unknown',
-            'bandwidth': 'Unknown',
             'power': 0,
             'swr': 0,
             'rf_gain': 0,
@@ -335,18 +334,12 @@ class FlrigWebRemote:
             except:
                 self.current_data['frequency_b'] = "N/A"
 
-            # Get mode and bandwidth
+            # Get mode, power, swr
             try:
                 self.current_data['mode'] = self.client.rig.get_mode()
             except:
                 self.current_data['mode'] = "Unknown"
 
-            try:
-                self.current_data['bandwidth'] = str(self.client.rig.get_bw())
-            except:
-                self.current_data['bandwidth'] = "Unknown"
-
-            # Get power and SWR
             try:
                 self.current_data['power'] = int(float(self.client.rig.get_power()))
             except:
@@ -356,17 +349,6 @@ class FlrigWebRemote:
                 self.current_data['swr'] = float(self.client.rig.get_swr())
             except:
                 self.current_data['swr'] = 0.0
-
-            # Get control levels (may not be available on all rigs)
-            try:
-                self.current_data['rf_gain'] = int(float(self.client.rig.get_rf_gain()))
-            except:
-                self.current_data['rf_gain'] = 0
-
-            try:
-                self.current_data['mic_gain'] = int(float(self.client.rig.get_mic_gain()))
-            except:
-                self.current_data['mic_gain'] = 0
 
             try:
                 self.current_data['volume'] = int(float(self.client.rig.get_volume()))
@@ -935,35 +917,6 @@ def handle_frequency_change(data):
     freq_hz = data.get('frequency')
     success, message = flrig_remote.set_frequency(freq_hz)
     emit('frequency_changed', {'success': success, 'error': message if not success else None})
-
-# --- New: sliders control for Mic and RF gains ---
-@socketio.on('set_mic_gain')
-def handle_set_mic_gain(data):
-    try:
-        val = int(data.get('value'))
-    except Exception:
-        emit('mic_gain_set', {'success': False, 'error': 'invalid value'})
-        return
-    try:
-        # Some rigs expect 0..100, others a different scale; pass through as-is
-        flrig_remote.client.rig.set_mic_gain(val)
-        # Reflect back success; next status_update will carry the authoritative value
-        emit('mic_gain_set', {'success': True, 'value': val})
-    except Exception as e:
-        emit('mic_gain_set', {'success': False, 'error': str(e)})
-
-@socketio.on('set_rf_gain')
-def handle_set_rf_gain(data):
-    try:
-        val = int(data.get('value'))
-    except Exception:
-        emit('rf_gain_set', {'success': False, 'error': 'invalid value'})
-        return
-    try:
-        flrig_remote.client.rig.set_rf_gain(val)
-        emit('rf_gain_set', {'success': True, 'value': val})
-    except Exception as e:
-        emit('rf_gain_set', {'success': False, 'error': str(e)})
 
 # ------------- Audio: WebRTC (Opus) -------------
 
