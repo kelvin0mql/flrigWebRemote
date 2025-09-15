@@ -125,16 +125,37 @@ async function startWebRTC() {
     });
   } catch (_) {}
 
+  // Add: verbose state logging
+  pc.onconnectionstatechange = () => {
+    console.log('[webrtc] pc.connectionState =', pc.connectionState);
+  };
+  pc.oniceconnectionstatechange = () => {
+    console.log('[webrtc] pc.iceConnectionState =', pc.iceConnectionState);
+  };
+  pc.onicegatheringstatechange = () => {
+    console.log('[webrtc] pc.iceGatheringState =', pc.iceGatheringState);
+  };
+
   pc.onicecandidate = (e) => { /* trickle-less; nothing extra needed */ };
 
   pc.ontrack = (event) => {
-    console.log('[webrtc] ontrack: kind=', event.track.kind);
+    console.log('[webrtc] ontrack: kind=', event.track.kind, 'id=', event.track.id);
     if (event.track.kind === 'audio') {
       const inboundStream = event.streams[0] || new MediaStream([event.track]);
+
+      // Track lifecycle logging
+      event.track.onmute = () => console.warn('[webrtc] inbound audio track muted');
+      event.track.onunmute = () => console.log('[webrtc] inbound audio track unmuted');
+      event.track.onended = () => console.warn('[webrtc] inbound audio track ended');
+
       rxAudioEl.srcObject = inboundStream;
       rxAudioEl.muted = false;
+
+      // Force playout and log result
       const p = rxAudioEl.play();
-      if (p && p.catch) p.catch(err => console.warn('[webrtc] audio play() rejected:', err));
+      if (p && p.then) {
+        p.then(() => console.log('[webrtc] audio play() OK')).catch(err => console.warn('[webrtc] audio play() rejected:', err));
+      }
     }
   };
 
@@ -145,6 +166,7 @@ async function startWebRTC() {
     offerToReceiveVideo: false
   });
   await pc.setLocalDescription(offer);
+  console.log('[webrtc] created offer, sdp bytes=', (pc.localDescription.sdp || '').length);
 
   const res = await fetch('/api/webrtc/offer', {
     method: 'POST',
@@ -162,7 +184,21 @@ async function startWebRTC() {
   }
 
   const answer = await res.json();
+  console.log('[webrtc] received answer, sdp bytes=', (answer && answer.sdp ? answer.sdp.length : -1));
   await pc.setRemoteDescription(answer);
+
+  // After remote description, check receiver track readiness
+  try {
+    const recv = pc.getReceivers().find(r => r.track && r.track.kind === 'audio');
+    if (recv && recv.track) {
+      console.log('[webrtc] receiver track readyState=', recv.track.readyState);
+    } else {
+      console.warn('[webrtc] no audio receiver track found after setRemoteDescription');
+    }
+  } catch (e) {
+    console.warn('[webrtc] receiver inspect failed:', e);
+  }
+
   webrtcConnected = true;
   updateListenButtons();
   console.log('[webrtc] connected');

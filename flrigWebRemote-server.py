@@ -758,19 +758,47 @@ async def _create_pc_with_rig_rx():
             await _cleanup_pc(pc)
 
     if USE_TONE:
+        print("[webrtc] using Tone1kTrack source")
         track = Tone1kTrack()
         pc.addTrack(track)
         return pc
 
     alsa_in = _alsa_input_device()
     if not alsa_in:
-        print("No ALSA input configured; cannot provide WebRTC audio.")
+        print("[webrtc] No ALSA input configured; cannot provide WebRTC audio.")
     else:
-        # Use arecord-backed capture to enforce exact SAMPLE_RATE/FRAME_SAMPLES
-        track = ArecordPcmTrack(alsa_in)
-        pc.addTrack(track)
-
+        print(f"[webrtc] creating ArecordPcmTrack on ALSA device: {alsa_in}")
+        try:
+            track = ArecordPcmTrack(alsa_in)
+            pc.addTrack(track)
+            print("[webrtc] ArecordPcmTrack added")
+        except Exception as e:
+            print(f"[webrtc] failed to start ArecordPcmTrack: {e}")
     return pc
+
+@app.post('/api/webrtc/offer')
+def api_webrtc_offer():
+    """
+    Signaling endpoint: accepts an SDP offer, returns an SDP answer.
+    Uses a long-lived asyncio loop and waits for ICE completion.
+    """
+    try:
+        payload = request.get_json(force=True, silent=False)
+        sdp_len = len(payload.get("sdp", "")) if isinstance(payload, dict) else -1
+        print(f"[webrtc] received offer, sdp bytes={sdp_len}")
+        offer = RTCSessionDescription(sdp=payload["sdp"], type=payload["type"])
+    except Exception as e:
+        return jsonify({"error": f"invalid offer: {e}"}), 400
+
+    try:
+        fut = asyncio.run_coroutine_threadsafe(_handle_webrtc_offer(offer), _aiortc_loop)
+        result = fut.result(timeout=10)
+        ans_len = len(result.get("sdp", "")) if isinstance(result, dict) else -1
+        print(f"[webrtc] sending answer, sdp bytes={ans_len}")
+        return jsonify(result)
+    except Exception as e:
+        print(f"[webrtc] offer handling failed: {e}")
+        return jsonify({"error": f"webrtc failed: {e}"}), 500
 
 async def _handle_webrtc_offer(offer: RTCSessionDescription):
     """
