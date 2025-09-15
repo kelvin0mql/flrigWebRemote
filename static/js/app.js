@@ -252,9 +252,11 @@ function updateDisplay(data) {
   // Sliders present in UI: Mic, RF
   micValue.textContent = data.mic_gain;
   micSlider.value = data.mic_gain;
+  micSlider.disabled = false; // allow control when data is available
 
   rfValue.textContent = data.rf_gain;
   rfSlider.value = data.rf_gain;
+  rfSlider.disabled = false;  // allow control when data is available
 
   // PWR numeric
   pwrValue.textContent = data.power;
@@ -540,6 +542,54 @@ async function requestMicPermission() {
   }
 }
 
+// Simple debounce helper for sliders
+function debounce(fn, delay) {
+  let t = null;
+  return (...args) => {
+    clearTimeout(t);
+    t = setTimeout(() => fn(...args), delay);
+  };
+}
+
+// Wire slider events to server
+document.addEventListener('DOMContentLoaded', function() {
+  if (micSlider) {
+    // Local feedback while sliding
+    micSlider.addEventListener('input', () => {
+      micValue.textContent = micSlider.value;
+    });
+    // Debounced send on change or after pause while sliding
+    const sendMic = debounce(() => {
+      const val = parseInt(micSlider.value, 10);
+      if (Number.isFinite(val)) socket.emit('set_mic_gain', { value: val });
+    }, 150);
+    micSlider.addEventListener('input', sendMic);
+    micSlider.addEventListener('change', sendMic);
+  }
+  if (rfSlider) {
+    rfSlider.addEventListener('input', () => {
+      rfValue.textContent = rfSlider.value;
+    });
+    const sendRf = debounce(() => {
+      const val = parseInt(rfSlider.value, 10);
+      if (Number.isFinite(val)) socket.emit('set_rf_gain', { value: val });
+    }, 150);
+    rfSlider.addEventListener('input', sendRf);
+    rfSlider.addEventListener('change', sendRf);
+  }
+});
+
+// Optional: acknowledgements/logging from server
+socket.on('mic_gain_set', (data) => {
+  if (!data || !data.success) {
+    console.warn('[mic_gain] set failed:', data && data.error);
+  }
+});
+socket.on('rf_gain_set', (data) => {
+  if (!data || !data.success) {
+    console.warn('[rf_gain] set failed:', data && data.error);
+  }
+});
 // Final DOM wiring: Mic button + restore UI wiring (listen buttons, band, extras)
 document.addEventListener('DOMContentLoaded', function() {
   const enableMicBtn = document.getElementById('enable-mic');

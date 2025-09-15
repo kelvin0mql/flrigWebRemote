@@ -936,6 +936,35 @@ def handle_frequency_change(data):
     success, message = flrig_remote.set_frequency(freq_hz)
     emit('frequency_changed', {'success': success, 'error': message if not success else None})
 
+# --- New: sliders control for Mic and RF gains ---
+@socketio.on('set_mic_gain')
+def handle_set_mic_gain(data):
+    try:
+        val = int(data.get('value'))
+    except Exception:
+        emit('mic_gain_set', {'success': False, 'error': 'invalid value'})
+        return
+    try:
+        # Some rigs expect 0..100, others a different scale; pass through as-is
+        flrig_remote.client.rig.set_mic_gain(val)
+        # Reflect back success; next status_update will carry the authoritative value
+        emit('mic_gain_set', {'success': True, 'value': val})
+    except Exception as e:
+        emit('mic_gain_set', {'success': False, 'error': str(e)})
+
+@socketio.on('set_rf_gain')
+def handle_set_rf_gain(data):
+    try:
+        val = int(data.get('value'))
+    except Exception:
+        emit('rf_gain_set', {'success': False, 'error': 'invalid value'})
+        return
+    try:
+        flrig_remote.client.rig.set_rf_gain(val)
+        emit('rf_gain_set', {'success': True, 'value': val})
+    except Exception as e:
+        emit('rf_gain_set', {'success': False, 'error': str(e)})
+
 # ------------- Audio: WebRTC (Opus) -------------
 
 @app.post('/api/webrtc/offer')
