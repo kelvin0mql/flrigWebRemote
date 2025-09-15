@@ -156,7 +156,6 @@ async function startWebRTC() {
     });
   } catch (_) {}
 
-  // Add: verbose state logging
   pc.onconnectionstatechange = () => {
     console.log('[webrtc] pc.connectionState =', pc.connectionState);
   };
@@ -173,8 +172,6 @@ async function startWebRTC() {
     console.log('[webrtc] ontrack: kind=', event.track.kind, 'id=', event.track.id);
     if (event.track.kind === 'audio') {
       const inboundStream = event.streams[0] || new MediaStream([event.track]);
-
-      // Track lifecycle logging
       event.track.onmute = () => console.warn('[webrtc] inbound audio track muted');
       event.track.onunmute = () => console.log('[webrtc] inbound audio track unmuted');
       event.track.onended = () => console.warn('[webrtc] inbound audio track ended');
@@ -182,7 +179,6 @@ async function startWebRTC() {
       rxAudioEl.srcObject = inboundStream;
       rxAudioEl.muted = false;
 
-      // Force playout and log result
       const p = rxAudioEl.play();
       if (p && p.then) {
         p.then(() => console.log('[webrtc] audio play() OK')).catch(err => console.warn('[webrtc] audio play() rejected:', err));
@@ -190,7 +186,21 @@ async function startWebRTC() {
     }
   };
 
+  // Receive rig audio
   pc.addTransceiver('audio', { direction: 'recvonly' });
+
+  // If mic was enabled before connect, add a send track now
+  try {
+    if (window.micEnabled && typeof micStream !== 'undefined' && micStream) {
+      const micTrack = micStream.getAudioTracks && micStream.getAudioTracks()[0];
+      if (micTrack) {
+        pc.addTrack(micTrack);
+        console.log('[webrtc] added mic track to PC');
+      }
+    }
+  } catch (e) {
+    console.warn('[webrtc] failed to attach mic track:', e);
+  }
 
   const offer = await pc.createOffer({
     offerToReceiveAudio: true,
@@ -218,7 +228,6 @@ async function startWebRTC() {
   console.log('[webrtc] received answer, sdp bytes=', (answer && answer.sdp ? answer.sdp.length : -1));
   await pc.setRemoteDescription(answer);
 
-  // After remote description, check receiver track readiness
   try {
     const recv = pc.getReceivers().find(r => r.track && r.track.kind === 'audio');
     if (recv && recv.track) {

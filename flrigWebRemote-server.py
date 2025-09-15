@@ -691,6 +691,100 @@ class ArecordPcmTrack(MediaStreamTrack):
                 pass
 
 # Helpers for PeerConnection lifecycle and ICE
+def _alsa_output_device():
+    """Return ALSA output device string like 'plughw:X,Y' or None."""
+    return AUDIO_CONFIG.get("audio_out", {}).get("alsa_device")
+
+async def _pipe_inbound_to_alsa(track: MediaStreamTrack, alsa_device: str):
+    """
+    Receive audio frames from inbound WebRTC track and write PCM to ALSA playback.
+    """
+    # Launch aplay to play raw s16le mono at SAMPLE_RATE
+    cmd = [
+        "aplay",
+        "-D", alsa_device,
+        "-f", "S16_LE",
+        "-c", "1",
+        "-r", str(SAMPLE_RATE),
+        "-q",
+    ]
+    proc = None
+    resampler = None
+    try:
+        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, bufsize=0)
+        resampler = AudioResampler(format="s16", layout="mono", rate=SAMPLE_RATE)
+        while True:
+            frame = await track.recv()  # av.AudioFrame
+            # Resample to our fixed rate/format/channel
+            for converted in resampler.resample(frame):
+                # Each converted is an av.AudioFrame
+                plane = converted.planes[0]
+                data = plane.to_bytes()  # s16 mono
+                try:
+                    proc.stdin.write(data)
+                except Exception:
+                    return
+    except Exception as e:
+        print(f"[webrtc uplink] pipeline error: {e}")
+    finally:
+        try:
+            if proc and proc.stdin:
+                try: proc.stdin.close()
+                except Exception: pass
+            if proc and proc.poll() is None:
+                try: proc.terminate()
+                except Exception: pass
+        except Exception:
+            pass
+
+async def _create_pc_with_rig_rx():
+    """
+    Create a PeerConnection that sends rig RX audio (from ALSA or synthetic tone) to the client.
+    Only one active PC is allowed at a time to avoid ALSA 'busy' errors.
+    Also accepts inbound client mic audio and pipes it to ALSA playback.
+    """
+    await _close_all_pcs()
+
+    pc = RTCPeerConnection()
+    pcs.add(pc)
+
+    @pc.on("connectionstatechange")
+    async def on_connectionstatechange():
+        print("WebRTC connection state:", pc.connectionState)
+        if pc.connectionState in ("failed", "closed", "disconnected"):
+            pcs.discard(pc)
+            await _cleanup_pc(pc)
+
+    # Handle inbound client audio (mic)
+    @pc.on("track")
+    async def on_track(track):
+        print(f"[webrtc uplink] inbound track kind={track.kind}")
+        if track.kind == "audio":
+            out_dev = _alsa_output_device()
+            if out_dev:
+                # Run piping as a background task
+                asyncio.create_task(_pipe_inbound_to_alsa(track, out_dev))
+            else:
+                print("[webrtc uplink] No ALSA output configured; dropping inbound audio")
+
+    if USE_TONE:
+        print("[webrtc] using Tone1kTrack source")
+        track = Tone1kTrack()
+        pc.addTrack(track)
+        return pc
+
+    alsa_in = _alsa_input_device()
+    if not alsa_in:
+        print("[webrtc] No ALSA input configured; cannot provide WebRTC audio.")
+    else:
+        print(f"[webrtc] creating ArecordPcmTrack on ALSA device: {alsa_in}")
+        try:
+            track = ArecordPcmTrack(alsa_in)
+            pc.addTrack(track)
+            print("[webrtc] ArecordPcmTrack added")
+        except Exception as e:
+            print(f"[webrtc] failed to start ArecordPcmTrack: {e}")
+    return pc
 
 def _alsa_input_device():
     """Return ALSA input device string like 'plughw:X,Y' or None."""
@@ -751,42 +845,6 @@ async def _wait_for_ice_complete(pc: RTCPeerConnection, timeout: float = 5.0):
     except asyncio.TimeoutError:
         # proceed with whatever candidates we have (LAN usually ok)
         pass
-
-async def _create_pc_with_rig_rx():
-    """
-    Create a PeerConnection that sends rig RX audio (from ALSA or synthetic tone) to the client.
-    Only one active PC is allowed at a time to avoid ALSA 'busy' errors.
-    """
-    await _close_all_pcs()
-
-    pc = RTCPeerConnection()
-    pcs.add(pc)
-
-    @pc.on("connectionstatechange")
-    async def on_connectionstatechange():
-        print("WebRTC connection state:", pc.connectionState)
-        if pc.connectionState in ("failed", "closed", "disconnected"):
-            pcs.discard(pc)
-            await _cleanup_pc(pc)
-
-    if USE_TONE:
-        print("[webrtc] using Tone1kTrack source")
-        track = Tone1kTrack()
-        pc.addTrack(track)
-        return pc
-
-    alsa_in = _alsa_input_device()
-    if not alsa_in:
-        print("[webrtc] No ALSA input configured; cannot provide WebRTC audio.")
-    else:
-        print(f"[webrtc] creating ArecordPcmTrack on ALSA device: {alsa_in}")
-        try:
-            track = ArecordPcmTrack(alsa_in)
-            pc.addTrack(track)
-            print("[webrtc] ArecordPcmTrack added")
-        except Exception as e:
-            print(f"[webrtc] failed to start ArecordPcmTrack: {e}")
-    return pc
 
 # -------------------- Flask routes --------------------
 @app.route('/')
