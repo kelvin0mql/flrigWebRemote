@@ -699,7 +699,7 @@ async def _pipe_inbound_to_alsa(track: MediaStreamTrack, alsa_device: str):
     """
     Receive audio frames from inbound WebRTC track and write PCM to ALSA playback.
     """
-    # Launch aplay to play raw s16le mono at SAMPLE_RATE
+    # Launch aplay to play raw s16le mono at SAMPLE_RATE with stable buffering
     cmd = [
         "aplay",
         "-D", alsa_device,
@@ -707,33 +707,53 @@ async def _pipe_inbound_to_alsa(track: MediaStreamTrack, alsa_device: str):
         "-c", "1",
         "-r", str(SAMPLE_RATE),
         "-q",
+        "-B", "200000",  # 200 ms playback buffer
+        "-F", "20000",   # 20 ms period
     ]
     proc = None
     resampler = None
+    outbuf = bytearray()
+    frame_bytes = FRAME_SAMPLES * 2  # s16 mono bytes in 20 ms at SAMPLE_RATE
+
     try:
-        proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, bufsize=0)
+        proc = subprocess.Popen(
+            cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, bufsize=0
+        )
         resampler = AudioResampler(format="s16", layout="mono", rate=SAMPLE_RATE)
+
         while True:
             frame = await track.recv()  # av.AudioFrame
             # Resample to our fixed rate/format/channel
             for converted in resampler.resample(frame):
-                # Each converted is an av.AudioFrame
-                plane = converted.planes[0]
-                data = plane.to_bytes()  # s16 mono
-                try:
-                    proc.stdin.write(data)
-                except Exception:
-                    return
+                # Each converted is an av.AudioFrame of variable size; accumulate to 20 ms boundaries
+                data = converted.planes[0].to_bytes()  # s16 mono
+                outbuf += data
+
+                # Write in exact 20 ms chunks to avoid aplay underruns/clicks
+                while len(outbuf) >= frame_bytes:
+                    chunk = bytes(outbuf[:frame_bytes])
+                    del outbuf[:frame_bytes]
+                    try:
+                        if proc and proc.stdin:
+                            proc.stdin.write(chunk)
+                        else:
+                            return
+                    except Exception:
+                        return
     except Exception as e:
         print(f"[webrtc uplink] pipeline error: {e}")
     finally:
         try:
             if proc and proc.stdin:
-                try: proc.stdin.close()
-                except Exception: pass
+                try:
+                    proc.stdin.close()
+                except Exception:
+                    pass
             if proc and proc.poll() is None:
-                try: proc.terminate()
-                except Exception: pass
+                try:
+                    proc.terminate()
+                except Exception:
+                    pass
         except Exception:
             pass
 
