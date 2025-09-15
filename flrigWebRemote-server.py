@@ -310,8 +310,6 @@ class FlrigWebRemote:
             'mode': 'Unknown',
             'power': 0,
             'swr': 0,
-            'rf_gain': 0,
-            'mic_gain': 0,
             'volume': 0,
             'connected': False,
             'last_update': 'Never'
