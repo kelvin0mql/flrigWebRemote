@@ -918,8 +918,63 @@ def handle_frequency_change(data):
     success, message = flrig_remote.set_frequency(freq_hz)
     emit('frequency_changed', {'success': success, 'error': message if not success else None})
 
-# ------------- Audio: WebRTC (Opus) -------------
+# --- Add: set_mode handler (used by Mode dropdown) ---
+@socketio.on('set_mode')
+def handle_set_mode(data):
+    try:
+        mode = str(data.get('mode', '')).strip()
+        if not mode:
+            emit('mode_set', {'success': False, 'error': 'missing mode'})
+            return
+        # Try provided case, then uppercase fallback
+        try:
+            flrig_remote.client.rig.set_mode(mode)
+        except Exception as e1:
+            try:
+                flrig_remote.client.rig.set_mode(mode.upper())
+            except Exception as e2:
+                emit('mode_set', {'success': False, 'error': f'{e1} | {e2}'})
+                return
+        emit('mode_set', {'success': True, 'mode': mode})
+    except Exception as e:
+        emit('mode_set', {'success': False, 'error': str(e)})
 
+# --- Add: temporary debug to verify mode control path ---
+@socketio.on('debug_probe_modes')
+def handle_debug_probe_modes(_data=None):
+    subset = ['LSB', 'USB', 'CW', 'AM', 'PKT-L', 'PKT-U']
+    results = []
+    try:
+        # Read current mode first
+        try:
+            cur = flrig_remote.client.rig.get_mode()
+        except Exception as e:
+            cur = f'get_mode failed: {e}'
+        results.append({'current': cur})
+
+        for m in subset:
+            ok = True
+            err = None
+            try:
+                # Try set case, then uppercase fallback
+                try:
+                    flrig_remote.client.rig.set_mode(m)
+                except Exception as e1:
+                    flrig_remote.client.rig.set_mode(m.upper())
+            except Exception as e2:
+                ok = False
+                err = str(e2)
+            # Read back
+            try:
+                readback = flrig_remote.client.rig.get_mode()
+            except Exception as e3:
+                readback = f'get_mode failed: {e3}'
+            results.append({'mode': m, 'set_ok': ok, 'readback': readback, 'error': err})
+        emit('debug_probe_modes_result', {'success': True, 'results': results})
+    except Exception as e:
+        emit('debug_probe_modes_result', {'success': False, 'error': str(e)})
+
+# ------------- Audio: WebRTC (Opus) -------------
 @app.post('/api/webrtc/offer')
 def api_webrtc_offer():
     """
