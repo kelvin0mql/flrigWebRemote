@@ -25,24 +25,15 @@ logging.getLogger("werkzeug").setLevel(logging.DEBUG if DEBUG_MODE else logging.
 logging.getLogger("engineio").setLevel(logging.DEBUG if DEBUG_MODE else logging.WARNING)
 logging.getLogger("socketio").setLevel(logging.DEBUG if DEBUG_MODE else logging.WARNING)
 
-# Add: file logging and stdout/stderr redirection (append to ./debug.log)
+# File logging only (do NOT redirect stdout/stderr, so interactive prompts remain visible)
 try:
-    _script_dir_for_log = os.path.dirname(os.path.abspath(__file__))
-    DEBUG_LOG_PATH = os.path.join(_script_dir_for_log, "debug.log")
-
-    # Route logging to file
-    _fh = logging.FileHandler(DEBUG_LOG_PATH, encoding="utf-8")
+    _debug_log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "debug.log")
+    _fh = logging.FileHandler(_debug_log_path, encoding="utf-8")
     _fh.setLevel(logging.DEBUG if DEBUG_MODE else logging.INFO)
     _fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
-    _root = logging.getLogger()
-    _root.addHandler(_fh)
-
-    # Route prints to the same file
-    _log_stream = open(DEBUG_LOG_PATH, "a", buffering=1)
-    sys.stdout = _log_stream
-    sys.stderr = _log_stream
+    logging.getLogger().addHandler(_fh)
 except Exception as _e:
-    logging.error(f"failed to init file logging: {_e}")
+    logging.error(f"failed to initialize file logging: {_e}")
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'flrig-web-remote-secret'
@@ -231,10 +222,10 @@ def ensure_audio_config(force_reconfigure: bool = False):
 
     # ---------- Ensure CAPTURE device (audio_in) ----------
     need_in = (
-        force_reconfigure or
-        ("audio_in" not in cfg) or
-        ("alsa_device" not in cfg.get("audio_in", {})) or
-        (not validate_stored_capture(cfg.get("audio_in")))
+            force_reconfigure or
+            ("audio_in" not in cfg) or
+            ("alsa_device" not in cfg.get("audio_in", {})) or
+            (not validate_stored_capture(cfg.get("audio_in")))
     )
 
     if need_in:
@@ -242,12 +233,14 @@ def ensure_audio_config(force_reconfigure: bool = False):
         if not in_list:
             print("No input-capable ALSA devices found. Proceeding without audio_in configuration.")
         else:
-            if sys.stdin.isatty():
+            picked_in = None
+            # Only prompt if explicitly reconfiguring; otherwise auto-pick to avoid blocking
+            if force_reconfigure and sys.stdin.isatty():
                 picked_in = prompt_select_device(in_list, title="input")
             else:
                 picked_in = auto_pick_device(in_list)
                 if picked_in:
-                    print(f"Non-interactive mode: auto-selected input {picked_in['name']} -> {picked_in['alsa_device']}")
+                    print(f"Auto-selected input {picked_in['name']} -> {picked_in['alsa_device']}")
             if picked_in:
                 cfg["audio_in"] = {
                     "device_name": picked_in["name"],
@@ -260,10 +253,10 @@ def ensure_audio_config(force_reconfigure: bool = False):
 
     # ---------- Ensure PLAYBACK device (audio_out) ----------
     need_out = (
-        force_reconfigure or
-        ("audio_out" not in cfg) or
-        ("alsa_device" not in cfg.get("audio_out", {})) or
-        (not validate_stored_playback(cfg.get("audio_out")))
+            force_reconfigure or
+            ("audio_out" not in cfg) or
+            ("alsa_device" not in cfg.get("audio_out", {})) or
+            (not validate_stored_playback(cfg.get("audio_out")))
     )
 
     if need_out:
@@ -271,12 +264,14 @@ def ensure_audio_config(force_reconfigure: bool = False):
         if not out_list:
             print("No output-capable ALSA devices found. Proceeding without audio_out configuration.")
         else:
-            if sys.stdin.isatty():
+            picked_out = None
+            # Only prompt if explicitly reconfiguring; otherwise auto-pick to avoid blocking
+            if force_reconfigure and sys.stdin.isatty():
                 picked_out = prompt_select_device(out_list, title="output")
             else:
                 picked_out = auto_pick_device(out_list)
                 if picked_out:
-                    print(f"Non-interactive mode: auto-selected output {picked_out['name']} -> {picked_out['alsa_device']}")
+                    print(f"Auto-selected output {picked_out['name']} -> {picked_out['alsa_device']}")
             if picked_out:
                 cfg["audio_out"] = {
                     "device_name": picked_out["name"],
