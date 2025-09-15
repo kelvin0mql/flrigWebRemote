@@ -248,6 +248,48 @@ body {
     }
 }
 
+/* Compact horizontal metrics bar */
+.metrics-inline {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    background-color: #ffffff;
+    border: 1px solid #dee2e6;
+    border-radius: 8px;
+    padding: 8px 10px;
+}
+.metrics-inline-item {
+    font-weight: 600;
+    font-size: 0.95rem;
+    white-space: nowrap;
+}
+.metrics-inline #pwr-value,
+.metrics-inline #swr-value {
+    font-weight: 700;
+}
+#mode-select {
+    width: auto;
+    min-width: 90px;
+    padding-top: 2px;
+    padding-bottom: 2px;
+}
+
+/* Tighter on small screens */
+@media (max-width: 430px) {
+    .metrics-inline {
+        padding: 6px 8px;
+        gap: 8px;
+    }
+    .metrics-inline-item {
+        font-size: 0.9rem;
+    }
+    #mode-select {
+        min-width: 78px;
+        font-size: 0.9rem;
+    }
+}
+
 /* --- Compact mobile overrides (iPhone-friendly) --- */
 @media (max-width: 430px) {
     /* Page padding and header */

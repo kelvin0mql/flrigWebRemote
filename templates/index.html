@@ -30,31 +30,20 @@
                 </div>
             </div>
 
-            <!-- PWR, SWR, Mode (single row) -->
-            <div class="row mb-3 metrics-row">
-                <div class="col-6 col-md-3">
-                    <div class="control-group">
-                        <div class="metric">
-                            <div class="metric-label">PWR</div>
-                            <div class="metric-value" id="pwr-value">0</div>
-                        </div>
-                    </div>
-                </div>
-                <div class="col-6 col-md-3">
-                    <div class="control-group">
-                        <div class="metric">
-                            <div class="metric-label">SWR</div>
-                            <div class="metric-value" id="swr-value">0.0</div>
-                        </div>
-                    </div>
-                </div>
-                <div class="col-6 col-md-3">
-                    <div class="control-group">
-                        <div class="metric">
-                            <div class="metric-label">Mode</div>
-                            <div class="mode-display metric-value" id="current-mode">Unknown</div>
-                        </div>
-                    </div>
+            <!-- Compact metrics bar: PWR | SWR | MODE -->
+            <div class="metrics-inline mb-2">
+                <div class="metrics-inline-item">PWR: <span id="pwr-value">0</span></div>
+                <div class="metrics-inline-item">SWR: <span id="swr-value">0.0</span></div>
+                <div class="metrics-inline-item">
+                    MODE:
+                    <select id="mode-select" class="form-select form-select-sm d-inline-block ms-1">
+                        <option value="LSB">LSB</option>
+                        <option value="USB">USB</option>
+                        <option value="CW">CW</option>
+                        <option value="AM">AM</option>
+                        <option value="PKT-L">PKT-L</option>
+                        <option value="PKT-U">PKT-U</option>
+                    </select>
                 </div>
             </div>
 

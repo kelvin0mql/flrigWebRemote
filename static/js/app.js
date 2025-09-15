@@ -6,8 +6,6 @@ const connectionStatus = document.getElementById('connection-status');
 const lastUpdate = document.getElementById('last-update');
 const frequencyA = document.getElementById('frequency-a');
 
-const currentMode = document.getElementById('current-mode');
-const currentBandwidth = document.getElementById('current-bandwidth');
 const pwrValue = document.getElementById('pwr-value');
 const swrValue = document.getElementById('swr-value');
 
@@ -19,6 +17,10 @@ const pttBtn = document.getElementById('ptt-btn');
 const rxAudioEl = document.getElementById('rx-audio');
 const connectAudioBtn = document.getElementById('connect-audio');
 const disconnectAudioBtn = document.getElementById('disconnect-audio');
+
+// Mode dropdown (compact subset)
+const modeSelect = document.getElementById('mode-select');
+const MODE_SUBSET = ['LSB','USB','CW','AM','PKT-L','PKT-U'];
 
 // Frequency limits (Hz)
 const MIN_FREQ_HZ = 30000;      // 30 kHz: typical HF rig lower limit
@@ -58,6 +60,18 @@ function stopLiveAudioStream() {
   stopWebRTC();
   updateListenButtons();
 }
+
+// Wire Mode dropdown -> emit to server
+document.addEventListener('DOMContentLoaded', function() {
+  if (modeSelect) {
+    modeSelect.addEventListener('change', () => {
+      const m = modeSelect.value;
+      if (MODE_SUBSET.includes(m)) {
+        socket.emit('set_mode', { mode: m });
+      }
+    });
+  }
+});
 
 // Wire Band buttons (click => emit band_select)
 function wireBandButtons() {
@@ -211,18 +225,12 @@ socket.on('disconnect', function() {
   connectionStatus.className = 'badge bg-danger';
 });
 
-// Normalize bandwidth display (strip brackets/quotes/commas)
-function formatBandwidth(raw) {
-  if (raw == null) return 'Unknown';
-  if (Array.isArray(raw)) {
-    const first = raw.find(x => String(x).trim() !== '');
-    return (first != null) ? String(first).trim() : 'Unknown';
+// Optional acknowledgement logging from server when mode is set
+socket.on('mode_set', (data) => {
+  if (!data || !data.success) {
+    console.warn('[mode] set failed:', data && data.error);
   }
-  const s = String(raw).trim();
-  const stripped = s.replace(/^[\[\(]\s*|[\]\)]\s*$/g, '').replace(/['"]/g, '');
-  const token = stripped.split(',').map(t => t.trim()).find(t => t.length > 0);
-  return token || s;
-}
+});
 
 function updateDisplay(data) {
   // Connection status
@@ -240,14 +248,16 @@ function updateDisplay(data) {
   // Frequency (clickable digits)
   updateClickableFrequency(data.frequency_a);
 
-  // Mode / Bandwidth
-  currentMode.textContent = data.mode;
-  currentBandwidth.textContent = formatBandwidth(data.bandwidth);
+  // Mode (sync dropdown if present; otherwise leave any legacy label alone)
+  if (modeSelect) {
+    const m = String(data.mode || '').toUpperCase();
+    if (MODE_SUBSET.includes(m) && modeSelect.value !== m) {
+      modeSelect.value = m;
+    }
+  }
 
-  // PWR numeric
+  // PWR and SWR inline
   pwrValue.textContent = data.power;
-
-  // SWR numeric + color
   const swr = Number(data.swr || 0);
   swrValue.textContent = swr.toFixed(1);
   swrValue.classList.remove('swr-ok', 'swr-warn', 'swr-bad');
@@ -502,41 +512,6 @@ function updateMicButton() {
   }
 }
 
-async function requestMicPermission() {
-  try {
-    const constraints = {
-      audio: {
-        echoCancellation: false,
-        noiseSuppression: false,
-        autoGainControl: false,
-        channelCount: 1,
-        sampleRate: 48000
-      },
-      video: false
-    };
-    const stream = await navigator.mediaDevices.getUserMedia(constraints);
-    // We only need the permission now; stop tracks immediately
-    stream.getTracks().forEach(t => { try { t.stop(); } catch (_) {} });
-    window.micEnabled = true;
-    updateMicButton();
-    return true;
-  } catch (err) {
-    console.warn('[mic] getUserMedia failed:', err);
-    window.micEnabled = false;
-    updateMicButton();
-    return false;
-  }
-}
-
-// Simple debounce helper for sliders
-function debounce(fn, delay) {
-  let t = null;
-  return (...args) => {
-    clearTimeout(t);
-    t = setTimeout(() => fn(...args), delay);
-  };
-}
-
 // Final DOM wiring: Mic button + restore UI wiring (listen buttons, band, extras)
 document.addEventListener('DOMContentLoaded', function() {
   const enableMicBtn = document.getElementById('enable-mic');
@@ -556,7 +531,7 @@ document.addEventListener('DOMContentLoaded', function() {
 // Keep mic capture alive for the whole session (do NOT stop tracks)
 let micStream = null;
 
-// Override requestMicPermission to persist the stream and not kill RX audio
+// requestMicPermission persists the stream to not kill RX audio
 async function requestMicPermission() {
   try {
     // If we already have a live stream, ensure RX playout is active and return
