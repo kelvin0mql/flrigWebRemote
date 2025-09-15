@@ -342,3 +342,38 @@ body {
         padding-right: 8px;
     }
 }
+
+/* --- Compact sliders: label/value inline + wide slider --- */
+.control-group {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px; /* already compacted earlier for mobile */
+    margin-bottom: 8px;
+}
+.control-group .form-label {
+    margin: 0;
+    white-space: nowrap;
+    min-width: 80px; /* ensures "Mic: 0" and "RF: 0" stay on one line */
+}
+.control-group .form-range {
+    flex: 1 1 auto;
+    margin: 0; /* remove default top/bottom margin that causes extra height */
+}
+
+/* --- Band buttons: 3 per row on small screens --- */
+@media (max-width: 430px) {
+    .band-buttons .row > [class^="col-"],
+    .band-buttons .row > [class*=" col-"] {
+        flex: 0 0 33.333%;
+        max-width: 33.333%;
+        padding-left: 6px;
+        padding-right: 6px;
+    }
+    .band-buttons .btn {
+        min-height: 36px;
+        font-size: 0.95rem;
+        padding: 6px 8px;
+        margin-bottom: 6px;
+    }
+}
