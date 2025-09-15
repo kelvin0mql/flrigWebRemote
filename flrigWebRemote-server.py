@@ -25,6 +25,25 @@ logging.getLogger("werkzeug").setLevel(logging.DEBUG if DEBUG_MODE else logging.
 logging.getLogger("engineio").setLevel(logging.DEBUG if DEBUG_MODE else logging.WARNING)
 logging.getLogger("socketio").setLevel(logging.DEBUG if DEBUG_MODE else logging.WARNING)
 
+# Add: file logging and stdout/stderr redirection (append to ./debug.log)
+try:
+    _script_dir_for_log = os.path.dirname(os.path.abspath(__file__))
+    DEBUG_LOG_PATH = os.path.join(_script_dir_for_log, "debug.log")
+
+    # Route logging to file
+    _fh = logging.FileHandler(DEBUG_LOG_PATH, encoding="utf-8")
+    _fh.setLevel(logging.DEBUG if DEBUG_MODE else logging.INFO)
+    _fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+    _root = logging.getLogger()
+    _root.addHandler(_fh)
+
+    # Route prints to the same file
+    _log_stream = open(DEBUG_LOG_PATH, "a", buffering=1)
+    sys.stdout = _log_stream
+    sys.stderr = _log_stream
+except Exception as _e:
+    logging.error(f"failed to init file logging: {_e}")
+
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'flrig-web-remote-secret'
 # Silence Socket.IO internal logging unless debug

@@ -1,6 +1,37 @@
 // Initialize Socket.IO connection
 const socket = io();
 
+// Forward selected console output to server (debug.log) and optionally mute browser console
+(() => {
+  const ECHO_IN_BROWSER = false;           // set true to also see logs in DevTools
+  const TAGS = ['[webrtc]', '[audio]'];    // only forward lines containing these tags
+
+  function stringify(parts) {
+    return parts.map(p => {
+      if (p instanceof Error) return (p.stack || String(p));
+      if (typeof p === 'object') {
+        try { return JSON.stringify(p); } catch (_) { return String(p); }
+      }
+      return String(p);
+    }).join(' ');
+  }
+
+  function shouldForward(parts) {
+    const s = stringify(parts);
+    return TAGS.some(t => s.includes(t));
+  }
+
+  ['log','warn','error'].forEach(level => {
+    const orig = console[level].bind(console);
+    console[level] = (...args) => {
+      if (shouldForward(args)) {
+        try { socket.emit('client_debug', { level, msg: stringify(args) }); } catch (_) {}
+      }
+      if (ECHO_IN_BROWSER) orig(...args);
+    };
+  });
+})();
+
 // DOM elements (must match index.html)
 const connectionStatus = document.getElementById('connection-status');
 const lastUpdate = document.getElementById('last-update');
