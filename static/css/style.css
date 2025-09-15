@@ -247,3 +247,98 @@ body {
         font-weight: 700;
     }
 }
+
+/* --- Compact mobile overrides (iPhone-friendly) --- */
+@media (max-width: 430px) {
+    /* Page padding and header */
+    .container-fluid { padding: 6px; }
+    h1.mt-3 { margin-top: 6px !important; margin-bottom: 6px !important; font-size: 1.25rem; }
+
+    /* Connection status row */
+    .text-center.mb-3 { margin-bottom: 8px !important; }
+    #last-update { font-size: 0.9rem; }
+
+    /* Main frequency block */
+    .frequency-display {
+        padding: 14px;
+        margin: 8px auto;
+        border-width: 1px;
+    }
+    .clickable-frequency {
+        font-size: 3.8rem; /* was 5-7rem */
+        padding: 10px 0;
+        line-height: 1.05;
+    }
+    .clickable-frequency .digit {
+        padding: 8px 1px;
+        min-width: 26px; /* tighter */
+        border-radius: 6px;
+    }
+    .clickable-frequency .digit:not([data-value]) {
+        padding: 8px 1px;
+        min-width: 10px;
+    }
+
+    /* Tune / PTT row */
+    .frequency-controls { margin: 10px 0; }
+    .frequency-controls button {
+        min-height: 42px;
+        font-size: 1rem;
+        font-weight: 700;
+        padding: 8px 14px;
+        margin: 4px 8px;
+    }
+
+    /* Metrics row (PWR | SWR | Mode | Bandwidth) */
+    .row.mb-3.metrics-row { margin-bottom: 8px !important; }
+    .metric {
+        padding: 6px;
+        border-radius: 6px;
+    }
+    .metric-label {
+        font-size: 0.75rem;
+        margin-bottom: 2px;
+    }
+    .metric-value {
+        font-size: 1rem;
+        font-weight: 700;
+    }
+
+    /* RX controls (Connect / Disconnect / Mic) */
+    .text-center.mb-4 { margin-bottom: 10px !important; }
+    .d-inline-flex.align-items-center.gap-2 { gap: 6px !important; }
+    #connect-audio, #disconnect-audio, #enable-mic {
+        min-height: 36px;
+        padding: 6px 10px;
+        font-size: 0.95rem;
+    }
+
+    /* Sliders block spacing */
+    .row.mb-4 { margin-bottom: 10px !important; }
+    .control-group { padding: 10px; margin-bottom: 8px; }
+
+    /* Band buttons block */
+    .band-buttons { padding: 12px; }
+    .band-buttons h5 { margin-bottom: 6px; font-size: 1rem; }
+    .band-buttons .btn {
+        min-height: 40px;
+        font-size: 1rem;
+        padding: 8px 10px;
+        margin-bottom: 6px;
+    }
+
+    /* Extras (A) block */
+    .extras-a { padding: 12px; }
+    .extras-a h5 { margin-bottom: 6px; font-size: 1rem; }
+    .extras-a .btn {
+        min-height: 40px;
+        font-size: 1rem;
+        padding: 8px 10px;
+    }
+
+    /* Tighten Bootstrap gutters slightly for mobile */
+    .row > [class^="col-"], .row > [class*=" col-"] {
+        padding-left: 8px;
+        padding-right: 8px;
+    }
+}

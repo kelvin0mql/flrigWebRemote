@@ -555,3 +555,49 @@ document.addEventListener('DOMContentLoaded', function() {
   wireBandButtons();
   wireExtrasA();
 });
+
+// Keep mic capture alive for the whole session (do NOT stop tracks)
+let micStream = null;
+
+// Override requestMicPermission to persist the stream and not kill RX audio
+async function requestMicPermission() {
+  try {
+    // If we already have a live stream, ensure RX playout is active and return
+    if (micStream && micStream.getTracks().some(t => t.readyState === 'live')) {
+      window.micEnabled = true;
+      updateMicButton();
+      if (rxAudioEl && rxAudioEl.srcObject) {
+        try { await rxAudioEl.play(); } catch (_) {}
+      }
+      return true;
+    }
+
+    const constraints = {
+      audio: {
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false,
+        channelCount: 1,
+        sampleRate: 48000
+      },
+      video: false
+    };
+
+    // Acquire and KEEP the mic stream; do NOT stop its tracks
+    micStream = await navigator.mediaDevices.getUserMedia(constraints);
+    window.micEnabled = true;
+    updateMicButton();
+
+    // If iOS paused RX playout when mic became active, resume it
+    if (rxAudioEl && rxAudioEl.srcObject) {
+      try { await rxAudioEl.play(); } catch (_) {}
+    }
+
+    return true;
+  } catch (err) {
+    console.warn('[mic] getUserMedia failed:', err);
+    window.micEnabled = false;
+    updateMicButton();
+    return false;
+  }
+}
