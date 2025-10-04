@@ -1,5 +1,20 @@
+// Debug logging for mobile
+function dbg(msg) {
+  console.log(msg);
+  const debugEl = document.getElementById('debugLog');
+  if (debugEl) {
+    const time = new Date().toISOString().substr(11, 12);
+    debugEl.innerHTML += `[${time}] ${msg}<br>`;
+    debugEl.scrollTop = debugEl.scrollHeight;
+  }
+}
+
+// ... existing code ...
 // Initialize Socket.IO connection
 const socket = io();
+
+// At top of app.js, after socket initialization
+let audioContext = null;
 
 // Forward selected console output to server (debug.log) and optionally mute browser console
 (() => {
@@ -92,18 +107,6 @@ function stopLiveAudioStream() {
   updateListenButtons();
 }
 
-// Wire Mode dropdown -> emit to server
-document.addEventListener('DOMContentLoaded', function() {
-  if (modeSelect) {
-    modeSelect.addEventListener('change', () => {
-      const m = modeSelect.value;
-      if (MODE_SUBSET.includes(m)) {
-        socket.emit('set_mode', { mode: m });
-      }
-    });
-  }
-});
-
 // Wire Band buttons (click => emit band_select)
 function wireBandButtons() {
   document.querySelectorAll('.band-buttons .band-btn').forEach(btn => {
@@ -131,11 +134,11 @@ function wireExtrasA() {
 function attachAudioDebug() {
   if (!rxAudioEl || rxAudioEl._dbgAttached) return;
   rxAudioEl._dbgAttached = true;
-  rxAudioEl.addEventListener('playing', () => console.log('[audio] playing, readyState=', rxAudioEl.readyState));
-  rxAudioEl.addEventListener('waiting', () => console.log('[audio] waiting, readyState=', rxAudioEl.readyState));
-  rxAudioEl.addEventListener('stalled', () => console.warn('[audio] stalled, networkState=', rxAudioEl.networkState));
-  rxAudioEl.addEventListener('error', () => console.error('[audio] error', rxAudioEl.error));
-  rxAudioEl.addEventListener('ended', () => console.log('[audio] ended'));
+  rxAudioEl.addEventListener('playing', () => dbg(`[audio] playing, readyState=${rxAudioEl.readyState}`));
+  rxAudioEl.addEventListener('waiting', () => dbg(`[audio] waiting, readyState=${rxAudioEl.readyState}`));
+  rxAudioEl.addEventListener('stalled', () => dbg(`[audio] stalled, networkState=${rxAudioEl.networkState}`));
+  rxAudioEl.addEventListener('error', () => dbg(`[audio] error ${rxAudioEl.error}`));
+  rxAudioEl.addEventListener('ended', () => dbg('[audio] ended'));
 }
 
 // --- WebRTC connect/disconnect ---
@@ -143,18 +146,21 @@ async function startWebRTC() {
   if (!rxAudioEl) return;
   if (webrtcConnected) return;
 
+  // Ensure audio context is running
+  if (!audioContext) {
+    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  if (audioContext.state === 'suspended') {
+    await audioContext.resume();
+    console.log('[audio] resumed audio context');
+  }
+
   attachAudioDebug();
 
   pc = new RTCPeerConnection({
     iceServers: [],
     bundlePolicy: 'max-bundle',
   });
-
-  try {
-    pc.getReceivers().forEach(r => {
-      if (typeof r.playoutDelayHint !== 'undefined') r.playoutDelayHint = 0.08;
-    });
-  } catch (_) {}
 
   pc.onconnectionstatechange = () => {
     console.log('[webrtc] pc.connectionState =', pc.connectionState);
@@ -169,19 +175,60 @@ async function startWebRTC() {
   pc.onicecandidate = (e) => { /* trickle-less; nothing extra needed */ };
 
   pc.ontrack = (event) => {
-    console.log('[webrtc] ontrack: kind=', event.track.kind, 'id=', event.track.id);
+    dbg(`[webrtc] ontrack: kind=${event.track.kind} id=${event.track.id} readyState=${event.track.readyState} muted=${event.track.muted}`);
     if (event.track.kind === 'audio') {
       const inboundStream = event.streams[0] || new MediaStream([event.track]);
-      event.track.onmute = () => console.warn('[webrtc] inbound audio track muted');
-      event.track.onunmute = () => console.log('[webrtc] inbound audio track unmuted');
-      event.track.onended = () => console.warn('[webrtc] inbound audio track ended');
+      dbg(`[webrtc] inboundStream tracks=${inboundStream.getTracks().length} active=${inboundStream.active}`);
 
-      rxAudioEl.srcObject = inboundStream;
-      rxAudioEl.muted = false;
+      event.track.onmute = () => dbg('[webrtc] inbound audio track muted');
+      event.track.onended = () => dbg('[webrtc] inbound audio track ended');
 
-      const p = rxAudioEl.play();
-      if (p && p.then) {
-        p.then(() => console.log('[webrtc] audio play() OK')).catch(err => console.warn('[webrtc] audio play() rejected:', err));
+      // Wait for track to unmute before playing
+      event.track.onunmute = () => {
+        dbg('[webrtc] inbound audio track unmuted');
+
+        rxAudioEl.srcObject = inboundStream;
+        rxAudioEl.muted = false;
+        dbg(`[webrtc] set srcObject, rxAudioEl.readyState=${rxAudioEl.readyState}`);
+
+        // Wait for audio element to have enough data
+        const tryPlay = () => {
+          dbg(`[webrtc] tryPlay called, readyState=${rxAudioEl.readyState}`);
+          const p = rxAudioEl.play();
+          if (p && p.then) {
+            p.then(() => dbg('[webrtc] audio play() OK')).catch(err => dbg(`[webrtc] audio play() rejected: ${err.message}`));
+          }
+        };
+
+        if (rxAudioEl.readyState >= 2) {
+          // Already have enough data
+          tryPlay();
+        } else {
+          // Wait for canplay event
+          rxAudioEl.addEventListener('canplay', tryPlay, { once: true });
+        }
+      };
+
+      // If already unmuted, play immediately
+      if (!event.track.muted) {
+        dbg('[webrtc] track already unmuted, playing now');
+        rxAudioEl.srcObject = inboundStream;
+        rxAudioEl.muted = false;
+        dbg(`[webrtc] set srcObject, rxAudioEl.readyState=${rxAudioEl.readyState}`);
+
+        const tryPlay = () => {
+          dbg(`[webrtc] tryPlay called, readyState=${rxAudioEl.readyState}`);
+          const p = rxAudioEl.play();
+          if (p && p.then) {
+            p.then(() => dbg('[webrtc] audio play() OK')).catch(err => dbg(`[webrtc] audio play() rejected: ${err.message}`));
+          }
+        };
+
+        if (rxAudioEl.readyState >= 2) {
+          tryPlay();
+        } else {
+          rxAudioEl.addEventListener('canplay', tryPlay, { once: true });
+        }
       }
     }
   };
@@ -189,9 +236,16 @@ async function startWebRTC() {
   // Receive rig audio
   pc.addTransceiver('audio', { direction: 'recvonly' });
 
+  // Set low latency hint on receivers
+  try {
+    pc.getReceivers().forEach(r => {
+      if (typeof r.playoutDelayHint !== 'undefined') r.playoutDelayHint = 0.08;
+    });
+  } catch (_) {}
+
   // If mic was enabled before connect, add a send track now
   try {
-    if (window.micEnabled && typeof micStream !== 'undefined' && micStream) {
+  if (window.micEnabled && typeof micStream !== 'undefined' && micStream) {
       const micTrack = micStream.getAudioTracks && micStream.getAudioTracks()[0];
       if (micTrack) {
         pc.addTrack(micTrack);
@@ -560,118 +614,151 @@ socket.on('ptt_response', function(data) {
   }
 });
 
-// Initialize PTT button to RX state (green) after DOM is loaded
+// Mic UX: separate connect/disconnect buttons
+window.micEnabled = false;
+let micStream = null;
+
+function updateMicButtons() {
+  const enableBtn = document.getElementById('enable-mic');
+  const disableBtn = document.getElementById('disable-mic');
+  if (!enableBtn || !disableBtn) return;
+
+  if (window.micEnabled) {
+    enableBtn.disabled = true;
+    enableBtn.className = 'btn btn-secondary';
+    disableBtn.disabled = false;
+    disableBtn.className = 'btn btn-danger';
+  } else {
+    enableBtn.disabled = false;
+    enableBtn.className = 'btn btn-outline-secondary';
+    disableBtn.disabled = true;
+    disableBtn.className = 'btn btn-outline-secondary';
+  }
+}
+
+async function connectMic() {
+  if (window.micEnabled) return;
+
+  try {
+    const constraints = {
+      audio: {
+        echoCancellation: false,
+        noiseSuppression: false,
+        autoGainControl: false,
+        channelCount: 1,
+        sampleRate: 48000
+      },
+      video: false
+    };
+    micStream = await navigator.mediaDevices.getUserMedia(constraints);
+    dbg('[mic] Got microphone stream');
+
+    // If WebRTC is already connected, add the track and renegotiate
+    if (pc && webrtcConnected) {
+      const micTrack = micStream.getAudioTracks()[0];
+      if (micTrack) {
+        pc.addTrack(micTrack, micStream);
+        dbg('[mic] Added mic track to PC, renegotiating...');
+
+        // Renegotiate
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+
+        const res = await fetch('/api/webrtc/offer', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sdp: pc.localDescription.sdp,
+            type: pc.localDescription.type
+          })
+        });
+
+        if (res.ok) {
+          const answer = await res.json();
+          await pc.setRemoteDescription(answer);
+          dbg('[mic] Renegotiation complete');
+        } else {
+          dbg('[mic] Renegotiation failed');
+        }
+      }
+    }
+
+    window.micEnabled = true;
+    updateMicButtons();
+    return true;
+  } catch (err) {
+    dbg(`[mic] getUserMedia failed: ${err.message}`);
+    window.micEnabled = false;
+    updateMicButtons();
+    return false;
+  }
+}
+
+async function disconnectMic() {
+  if (!window.micEnabled) return;
+
+  // Stop all mic tracks
+  if (micStream) {
+    micStream.getTracks().forEach(t => {
+      try {
+        t.stop();
+        dbg('[mic] Stopped mic track');
+      } catch (_) {}
+    });
+    micStream = null;
+  }
+
+  // Remove mic tracks from PC if connected
+  if (pc && webrtcConnected) {
+    const senders = pc.getSenders();
+    senders.forEach(sender => {
+      if (sender.track && sender.track.kind === 'audio') {
+        pc.removeTrack(sender);
+        dbg('[mic] Removed mic track from PC');
+      }
+    });
+  }
+
+  window.micEnabled = false;
+  updateMicButtons();
+}
+
+// Wire up mic buttons
 document.addEventListener('DOMContentLoaded', function() {
+  const enableMicBtn = document.getElementById('enable-mic');
+  const disableMicBtn = document.getElementById('disable-mic');
+
+  if (enableMicBtn) {
+    enableMicBtn.addEventListener('click', async () => {
+      await connectMic();
+    });
+  }
+
+  if (disableMicBtn) {
+    disableMicBtn.addEventListener('click', async () => {
+      await disconnectMic();
+    });
+  }
+
+  // Initialize mic button states
+  updateMicButtons();
+
+  // Initialize PTT button to RX state (green)
   pttBtn.className = 'btn btn-success';
   pttBtn.style.backgroundColor = '#28a745';
   pttBtn.style.color = 'white';
-});
 
-// Mic UX: compact "Mic" button with enabled/disabled styling
-window.micEnabled = false;
-
-function updateMicButton() {
-  const btn = document.getElementById('enable-mic');
-  if (!btn) return;
-  if (window.micEnabled) {
-    btn.textContent = 'Mic';
-    btn.className = 'btn btn-danger';
-    btn.style.backgroundColor = '#dc3545';
-    btn.style.color = 'white';
-    btn.style.fontWeight = 'bold';
-  } else {
-    btn.textContent = 'Mic';
-    btn.className = 'btn btn-outline-secondary';
-    btn.style.backgroundColor = '';
-    btn.style.color = '';
-    btn.style.fontWeight = '';
-  }
-}
-
-async function requestMicPermission() {
-  try {
-    const constraints = {
-      audio: {
-        echoCancellation: false,
-        noiseSuppression: false,
-        autoGainControl: false,
-        channelCount: 1,
-        sampleRate: 48000
-      },
-      video: false
-    };
-    const stream = await navigator.mediaDevices.getUserMedia(constraints);
-    // We only need the permission now; stop tracks immediately
-    stream.getTracks().forEach(t => { try { t.stop(); } catch (_) {} });
-    window.micEnabled = true;
-    updateMicButton();
-    return true;
-  } catch (err) {
-    console.warn('[mic] getUserMedia failed:', err);
-    window.micEnabled = false;
-    updateMicButton();
-    return false;
-  }
-}
-
-// Final DOM wiring: Mic button + restore UI wiring (listen buttons, band, extras)
-document.addEventListener('DOMContentLoaded', function() {
-  const enableMicBtn = document.getElementById('enable-mic');
-  if (enableMicBtn) {
-    enableMicBtn.addEventListener('click', async () => {
-      await requestMicPermission();
-    });
-  }
-  // Ensure Mic button reflects current state
-  updateMicButton();
-  // Restore the rest of the UI bindings
-  updateListenButtons();
+  // Wire up other UI elements
   wireBandButtons();
   wireExtrasA();
-});
 
-// Keep mic capture alive for the whole session (do NOT stop tracks)
-let micStream = null;
-
-// requestMicPermission persists the stream to not kill RX audio
-async function requestMicPermission() {
-  try {
-    // If we already have a live stream, ensure RX playout is active and return
-    if (micStream && micStream.getTracks().some(t => t.readyState === 'live')) {
-      window.micEnabled = true;
-      updateMicButton();
-      if (rxAudioEl && rxAudioEl.srcObject) {
-        try { await rxAudioEl.play(); } catch (_) {}
+  if (modeSelect) {
+    modeSelect.addEventListener('change', () => {
+      const m = modeSelect.value;
+      if (MODE_SUBSET.includes(m)) {
+        socket.emit('set_mode', { mode: m });
       }
-      return true;
-    }
-
-    const constraints = {
-      audio: {
-        echoCancellation: false,
-        noiseSuppression: false,
-        autoGainControl: false,
-        channelCount: 1,
-        sampleRate: 48000
-      },
-      video: false
-    };
-
-    // Acquire and KEEP the mic stream; do NOT stop its tracks
-    micStream = await navigator.mediaDevices.getUserMedia(constraints);
-    window.micEnabled = true;
-    updateMicButton();
-
-    // If iOS paused RX playout when mic became active, resume it
-    if (rxAudioEl && rxAudioEl.srcObject) {
-      try { await rxAudioEl.play(); } catch (_) {}
-    }
-
-    return true;
-  } catch (err) {
-    console.warn('[mic] getUserMedia failed:', err);
-    window.micEnabled = false;
-    updateMicButton();
-    return false;
+    });
   }
-}
+
+});

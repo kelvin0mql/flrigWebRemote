@@ -619,6 +619,7 @@ async def _pipe_inbound_to_audio_device(track: MediaStreamTrack, device_index: i
     """
     Receive audio frames from inbound WebRTC track and write PCM to audio device playback.
     """
+    import numpy as np
     stream = None
     resampler = None
     outbuf = bytearray()
@@ -647,8 +648,10 @@ async def _pipe_inbound_to_audio_device(track: MediaStreamTrack, device_index: i
 
             # Resample to device's native rate
             for converted in resampler.resample(frame):
-                # Each converted is an av.AudioFrame of variable size; accumulate to 20 ms boundaries
-                data = converted.planes[0].to_bytes()  # s16 mono
+                # Convert av.AudioFrame to bytes
+                # Use .to_ndarray() instead of .to_bytes()
+                audio_array = converted.to_ndarray()  # Returns numpy array
+                data = audio_array.tobytes()  # Convert to bytes
                 outbuf += data
 
                 # Write in exact 20 ms chunks to avoid underruns/clicks
@@ -659,7 +662,6 @@ async def _pipe_inbound_to_audio_device(track: MediaStreamTrack, device_index: i
                     try:
                         if stream and stream.active:
                             # Convert bytes to numpy array and write
-                            import numpy as np
                             audio_array = np.frombuffer(chunk, dtype='int16').reshape(-1, 1)
                             stream.write(audio_array)
                         else:

@@ -53,9 +53,16 @@
                 <div class="d-inline-flex align-items-center gap-2">
                     <button id="connect-audio" class="btn btn-outline-secondary">Connect Audio</button>
                     <button id="disconnect-audio" class="btn btn-outline-secondary">Disconnect</button>
-                    <button id="enable-mic" class="btn btn-outline-secondary">Mic</button>
+                </div>
+                <div class="d-inline-flex align-items-center gap-2 mt-2">
+                    <button id="enable-mic" class="btn btn-outline-secondary">Connect Mic</button>
+                    <button id="disable-mic" class="btn btn-outline-secondary">Disconnect Mic</button>
                 </div>
             </div>
+
+            <!-- Debug Log -->
+            <!-- <div id="debugLog" style="position: fixed; bottom: 0; left: 0; right: 0; max-height: 200px; overflow-y: scroll; background: rgba(0,0,0,0.9); color: #0f0; font-family: monospace; font-size: 11px; padding: 8px; z-index: 9999; border-top: 2px solid #0f0;"></div>
+            <button onclick="alert('rxAudioEl=' + (typeof rxAudioEl !== 'undefined' ? 'exists' : 'undefined'))" class="btn btn-sm btn-warning mb-2">Test Debug</button>-->
 
             <!-- Band Buttons -->
             <div class="band-buttons mb-4">
