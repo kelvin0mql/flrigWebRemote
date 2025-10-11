@@ -7,9 +7,9 @@ host on your LAN, you can run it on a different machine. (Using the alternate br
 this on my Mac, remotely controling the Linux box that runs flrig. In so doing, I've goten even
 clearer audio, plus TX audio from the iPhone mic, with pretty low latency.)
 
-Find the LAN IP address of the flrig machine.
+Find the LAN IP address of the host running this python app.
 
-On your iPhone/iPad/whatever, browse to <flrig-LAN-IP>:5000
+On your iPhone/iPad/whatever, browse to {python-app-IP}:5000
 
 And lookie there... you have a web remote display for your station.
 
