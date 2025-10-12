@@ -9,12 +9,29 @@ function dbg(msg) {
   }
 }
 
-// ... existing code ...
 // Initialize Socket.IO connection
 const socket = io();
 
-// At top of app.js, after socket initialization
 let audioContext = null;
+
+// CW Tone Generator state
+let cwOscillator = null;
+let cwGainNode = null;
+let cwDestination = null;
+const CW_TONE_FREQ = 700; // Hz
+let leftCtrlPressed = false;
+let rightCtrlPressed = false;
+let cwPTTHangTimer = null;
+const CW_PTT_HANG_MS = 300; // PTT hang time in milliseconds
+let cwToneSender = null; // Track the RTP sender for CW tone
+
+// Iambic keyer state
+const CW_WPM = 17;
+const DIT_MS = 1200 / CW_WPM; // ~70.6ms at 17 WPM
+const DAH_MS = DIT_MS * 3;    // ~212ms
+let keyerTimer = null;
+let keyerState = 'idle'; // idle, sending_dit, sending_dah, element_space
+let pendingElement = null; // 'dit' or 'dah' for iambic keying
 
 // Forward selected console output to server (debug.log) and optionally mute browser console
 (() => {
@@ -538,7 +555,7 @@ function togglePTT() {
     pttBtn.style.color = 'white';
     socket.emit('ptt_control', { action: 'on' });
 
-    // Do NOT disconnect WebRTC anymore; just mute local playout during TX
+    // Mute local playout during TX
     if (rxAudioEl) {
       rxAudioEl.muted = true;
     }
@@ -548,7 +565,10 @@ function togglePTT() {
     pttBtn.style.color = 'white';
     socket.emit('ptt_control', { action: 'off' });
 
-    // Unmute playout; we didn't disconnect the stream
+    // Flush RX audio buffers to prevent stale audio playback
+    flushRXAudioBuffers();
+
+    // Unmute playout after flushing
     if (rxAudioEl) {
       rxAudioEl.muted = false;
     }
@@ -560,6 +580,34 @@ function togglePTT() {
     wasListeningBeforePTT = false;
 
     updateListenButtons();
+  }
+}
+
+function flushRXAudioBuffers() {
+  if (!rxAudioEl) return;
+
+  try {
+    // Method 1: Pause and reset currentTime to flush buffer
+    rxAudioEl.pause();
+    rxAudioEl.currentTime = 0;
+
+    // Method 2: If srcObject exists, recreate the media element binding
+    if (rxAudioEl.srcObject) {
+      const stream = rxAudioEl.srcObject;
+      rxAudioEl.srcObject = null;
+
+      // Small delay to ensure buffers are cleared
+      setTimeout(() => {
+        rxAudioEl.srcObject = stream;
+        rxAudioEl.play().catch(err => {
+          dbg(`[audio] Resume play after flush failed: ${err.message}`);
+        });
+      }, 50);
+    }
+
+    dbg('[audio] RX buffers flushed');
+  } catch (err) {
+    dbg(`[audio] Error flushing buffers: ${err.message}`);
   }
 }
 
@@ -650,6 +698,8 @@ async function connectMic() {
       },
       video: false
     };
+
+    dbg('[mic] Requesting microphone access...');
     micStream = await navigator.mediaDevices.getUserMedia(constraints);
     dbg('[mic] Got microphone stream');
 
@@ -678,16 +728,20 @@ async function connectMic() {
           await pc.setRemoteDescription(answer);
           dbg('[mic] Renegotiation complete');
         } else {
-          dbg('[mic] Renegotiation failed');
+          const errorText = await res.text();
+          dbg(`[mic] Renegotiation failed: ${res.status} ${errorText}`);
         }
       }
+    } else {
+      dbg('[mic] WebRTC not connected, mic will be added when WebRTC connects');
     }
 
     window.micEnabled = true;
     updateMicButtons();
     return true;
   } catch (err) {
-    dbg(`[mic] getUserMedia failed: ${err.message}`);
+    dbg(`[mic] getUserMedia failed: ${err.name} - ${err.message}`);
+    alert(`Microphone access denied or failed: ${err.message}\n\nFor CW tones, you don't need the microphone - just connect audio and use the paddles.`);
     window.micEnabled = false;
     updateMicButtons();
     return false;
@@ -723,6 +777,318 @@ async function disconnectMic() {
   updateMicButtons();
 }
 
+// ... existing disconnectMic function ...
+
+// CW Tone Generator Functions
+async function initCWToneGenerator() {
+  if (!audioContext) {
+    audioContext = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  if (audioContext.state === 'suspended') {
+    await audioContext.resume();
+  }
+
+  // Create gain node
+  cwGainNode = audioContext.createGain();
+  cwGainNode.gain.value = 0; // Start muted
+
+  // Create a destination that can be routed to WebRTC
+  cwDestination = audioContext.createMediaStreamDestination();
+  cwGainNode.connect(cwDestination);
+
+  // Also connect to local speakers for sidetone (optional, lower volume)
+  const sidetoneGain = audioContext.createGain();
+  sidetoneGain.gain.value = 0.1; // Quiet local sidetone
+  cwGainNode.connect(sidetoneGain);
+  sidetoneGain.connect(audioContext.destination);
+
+  dbg('[cw] Tone generator initialized');
+}
+
+async function ensureCWToneInWebRTC() {
+  // If WebRTC is connected, make sure our tone track is added
+  if (!pc || !webrtcConnected || !cwDestination) return false;
+
+  // Check if we already have a sender for the tone
+  if (cwToneSender && cwToneSender.track) {
+    dbg('[cw] Tone track already in WebRTC');
+    return true;
+  }
+
+  const toneTrack = cwDestination.stream.getAudioTracks()[0];
+  if (!toneTrack) {
+    dbg('[cw] ERROR: No tone track available');
+    return false;
+  }
+
+  try {
+    // Add the tone track
+    cwToneSender = pc.addTrack(toneTrack, cwDestination.stream);
+    dbg('[cw] Added tone track to WebRTC, renegotiating...');
+
+    // Renegotiate
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+
+    const res = await fetch('/api/webrtc/offer', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        sdp: pc.localDescription.sdp,
+        type: pc.localDescription.type
+      })
+    });
+
+    if (res.ok) {
+      const answer = await res.json();
+      await pc.setRemoteDescription(answer);
+      dbg('[cw] Tone track renegotiation complete');
+      return true;
+    } else {
+      const errorText = await res.text();
+      dbg(`[cw] Renegotiation failed: ${res.status} ${errorText}`);
+      return false;
+    }
+  } catch (err) {
+    dbg(`[cw] ERROR adding tone track: ${err.message}`);
+    return false;
+  }
+}
+
+async function startCWTone() {
+  if (!audioContext || !cwGainNode) {
+    await initCWToneGenerator();
+  }
+
+  // Clear any pending PTT hang timer
+  if (cwPTTHangTimer) {
+    clearTimeout(cwPTTHangTimer);
+    cwPTTHangTimer = null;
+  }
+
+  // Enable PTT if not already active
+  if (!pttActive) {
+    togglePTT();
+    // Give PTT a moment to engage before starting tone
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+
+  // Ensure tone track is in WebRTC
+  await ensureCWToneInWebRTC();
+
+  // If oscillator already exists, don't create a new one
+  if (cwOscillator) {
+    // Just ramp up the gain
+    const now = audioContext.currentTime;
+    cwGainNode.gain.cancelScheduledValues(now);
+    cwGainNode.gain.setValueAtTime(cwGainNode.gain.value, now);
+    cwGainNode.gain.linearRampToValueAtTime(0.5, now + 0.005);
+    dbg('[cw] Tone ramped up');
+    return;
+  }
+
+  // Create and start oscillator
+  cwOscillator = audioContext.createOscillator();
+  cwOscillator.type = 'sine';
+  cwOscillator.frequency.value = CW_TONE_FREQ;
+  cwOscillator.connect(cwGainNode);
+  cwOscillator.start();
+
+  // Ramp up gain smoothly to avoid clicks
+  const now = audioContext.currentTime;
+  cwGainNode.gain.setValueAtTime(0, now);
+  cwGainNode.gain.linearRampToValueAtTime(0.5, now + 0.005); // 5ms ramp
+
+  dbg('[cw] Tone started at ' + CW_TONE_FREQ + 'Hz');
+}
+
+function stopCWTone() {
+  if (!cwOscillator || !cwGainNode) return;
+
+  // Ramp down gain smoothly to avoid clicks
+  const now = audioContext.currentTime;
+  cwGainNode.gain.cancelScheduledValues(now);
+  cwGainNode.gain.setValueAtTime(cwGainNode.gain.value, now);
+  cwGainNode.gain.linearRampToValueAtTime(0, now + 0.005); // 5ms ramp
+
+  // Check if we should start the PTT hang timer
+  // Only if keyer is idle, no paddles pressed, and no pending elements
+  const shouldReleasePTT = (keyerState === 'idle' || keyerState === 'element_space')
+    && !leftCtrlPressed
+    && !rightCtrlPressed
+    && !pendingElement;
+
+  if (shouldReleasePTT && pttActive) {
+    if (cwPTTHangTimer) {
+      clearTimeout(cwPTTHangTimer);
+    }
+    cwPTTHangTimer = setTimeout(() => {
+      // Double-check conditions haven't changed
+      if (!leftCtrlPressed && !rightCtrlPressed && !pendingElement && pttActive) {
+        dbg('[cw] PTT hang timer expired, releasing PTT');
+        togglePTT();
+      }
+      cwPTTHangTimer = null;
+    }, CW_PTT_HANG_MS);
+    dbg(`[cw] PTT hang timer started (${CW_PTT_HANG_MS}ms)`);
+  }
+}
+
+function cleanupCWState() {
+  // Clear all timers
+  if (keyerTimer) {
+    clearTimeout(keyerTimer);
+    keyerTimer = null;
+  }
+  if (cwPTTHangTimer) {
+    clearTimeout(cwPTTHangTimer);
+    cwPTTHangTimer = null;
+  }
+
+  // Reset state
+  keyerState = 'idle';
+  pendingElement = null;
+  leftCtrlPressed = false;
+  rightCtrlPressed = false;
+
+  // Stop tone
+  if (cwOscillator) {
+    try {
+      cwOscillator.stop();
+      cwOscillator.disconnect();
+    } catch (_) {}
+    cwOscillator = null;
+  }
+
+  dbg('[cw] CW state cleaned up');
+}
+
+function startKeyerElement(isDit) {
+  if (keyerState !== 'idle') return; // Already sending
+
+  const duration = isDit ? DIT_MS : DAH_MS;
+  keyerState = isDit ? 'sending_dit' : 'sending_dah';
+
+  // Clear any pending PTT hang timer since we're starting a new element
+  if (cwPTTHangTimer) {
+    clearTimeout(cwPTTHangTimer);
+    cwPTTHangTimer = null;
+    dbg('[cw] Cleared PTT hang timer (new element starting)');
+  }
+
+  // Start the tone
+  startCWTone();
+
+  dbg(`[cw] Sending ${isDit ? 'DIT' : 'DAH'} (${duration.toFixed(1)}ms)`);
+
+  // Schedule tone to stop after element duration
+  keyerTimer = setTimeout(() => {
+    stopCWTone();
+    keyerState = 'element_space';
+
+    // Inter-element space (1 dit length)
+    keyerTimer = setTimeout(() => {
+      keyerState = 'idle';
+
+      // Check if paddle is still pressed or if there's a pending element
+      if (pendingElement) {
+        const nextIsDit = (pendingElement === 'dit');
+        pendingElement = null;
+        startKeyerElement(nextIsDit);
+      } else if (leftCtrlPressed) {
+        startKeyerElement(true); // Continue with dit
+      } else if (rightCtrlPressed) {
+        startKeyerElement(false); // Continue with dah
+      } else {
+        // Both paddles released, keyer is now truly idle
+        dbg('[cw] Keyer idle, both paddles released');
+        stopCWTone(); // This will start the PTT hang timer
+      }
+    }, DIT_MS);
+  }, duration);
+}
+
+function handleCWKeyDown(isLeftCtrl) {
+  if (isLeftCtrl) {
+    if (leftCtrlPressed) return; // Already pressed
+    leftCtrlPressed = true;
+    dbg('[cw] Left paddle DOWN (DIT)');
+  } else {
+    if (rightCtrlPressed) return; // Already pressed
+    rightCtrlPressed = true;
+    dbg('[cw] Right paddle DOWN (DAH)');
+  }
+
+  // Clear any pending PTT hang timer
+  if (cwPTTHangTimer) {
+    clearTimeout(cwPTTHangTimer);
+    cwPTTHangTimer = null;
+  }
+
+  // Iambic behavior: if we're currently sending and the other paddle is pressed,
+  // queue the opposite element
+  if (keyerState === 'sending_dit' && rightCtrlPressed && !leftCtrlPressed) {
+    pendingElement = 'dah';
+    dbg('[cw] Queued DAH (iambic)');
+  } else if (keyerState === 'sending_dah' && leftCtrlPressed && !rightCtrlPressed) {
+    pendingElement = 'dit';
+    dbg('[cw] Queued DIT (iambic)');
+  } else if (keyerState === 'idle') {
+    // Start sending immediately
+    if (isLeftCtrl) {
+      startKeyerElement(true); // Dit
+    } else {
+      startKeyerElement(false); // Dah
+    }
+  }
+}
+
+function handleCWKeyUp(isLeftCtrl) {
+  if (isLeftCtrl) {
+    leftCtrlPressed = false;
+    dbg('[cw] Left paddle UP');
+  } else {
+    rightCtrlPressed = false;
+    dbg('[cw] Right paddle UP');
+  }
+
+  // Clear any pending element if both paddles are up
+  if (!leftCtrlPressed && !rightCtrlPressed) {
+    pendingElement = null;
+  }
+}
+
+// Keyboard event handlers for CW paddles
+function setupCWKeyListeners() {
+  document.addEventListener('keydown', (e) => {
+    // Left Control
+    if (e.key === 'Control' && e.location === KeyboardEvent.DOM_KEY_LOCATION_LEFT) {
+      e.preventDefault();
+      handleCWKeyDown(true);
+    }
+    // Right Control
+    else if (e.key === 'Control' && e.location === KeyboardEvent.DOM_KEY_LOCATION_RIGHT) {
+      e.preventDefault();
+      handleCWKeyDown(false);
+    }
+  });
+
+  document.addEventListener('keyup', (e) => {
+    // Left Control
+    if (e.key === 'Control' && e.location === KeyboardEvent.DOM_KEY_LOCATION_LEFT) {
+      e.preventDefault();
+      handleCWKeyUp(true);
+    }
+    // Right Control
+    else if (e.key === 'Control' && e.location === KeyboardEvent.DOM_KEY_LOCATION_RIGHT) {
+      e.preventDefault();
+      handleCWKeyUp(false);
+    }
+  });
+
+  dbg('[cw] Keyboard listeners set up');
+}
+
 // Wire up mic buttons
 document.addEventListener('DOMContentLoaded', function() {
   const enableMicBtn = document.getElementById('enable-mic');
@@ -751,6 +1117,10 @@ document.addEventListener('DOMContentLoaded', function() {
   // Wire up other UI elements
   wireBandButtons();
   wireExtrasA();
+
+  // Initialize CW keyboard listeners
+  setupCWKeyListeners();
+  initCWToneGenerator();
 
   if (modeSelect) {
     modeSelect.addEventListener('change', () => {
