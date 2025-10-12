@@ -2,9 +2,14 @@
 
 Run this on the same machine as flrig that is controlling your radio.
 
-Find the LAN IP address of the flrig machine.
+Alternately, if you have flrig set up to bind to an IP address that can be reached from another
+host on your LAN, you can run it on a different machine. (Using the alternate branch, I've run
+this on my Mac, remotely controling the Linux box that runs flrig. In so doing, I've goten even
+clearer audio, plus TX audio from the iPhone mic, with pretty low latency.)
 
-On your iPhone/iPad/whatever, browse to <flrig-LAN-IP>:5000
+Find the LAN IP address of the host running this python app.
+
+On your iPhone/iPad/whatever, browse to {python-app-IP}:5000
 
 And lookie there... you have a web remote display for your station.
 
