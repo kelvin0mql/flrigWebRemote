@@ -419,3 +419,36 @@ body {
         margin-bottom: 6px;
     }
 }
+
+/* CW buttons - kill ALL Bootstrap active/focus states */
+.cw-btn,
+.cw-speed-btn {
+    -webkit-tap-highlight-color: transparent;
+}
+
+.cw-btn:active,
+.cw-btn:focus,
+.cw-btn:focus-visible,
+.cw-speed-btn:active,
+.cw-speed-btn:focus,
+.cw-speed-btn:focus-visible {
+    background-color: transparent !important;
+    color: inherit !important;
+    border-color: inherit !important;
+    box-shadow: none !important;
+    outline: none !important;
+}
+
+.btn-outline-success:active,
+.btn-outline-success:focus {
+    background-color: transparent !important;
+    color: #198754 !important;
+    border-color: #198754 !important;
+}
+
+.btn-outline-dark:active,
+.btn-outline-dark:focus {
+    background-color: transparent !important;
+    color: #212529 !important;
+    border-color: #212529 !important;
+}

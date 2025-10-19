@@ -18,6 +18,14 @@ from av.audio.resampler import AudioResampler
 import math
 from aiortc import RTCPeerConnection, RTCSessionDescription, MediaStreamTrack
 
+# Import WinKeyer module
+try:
+    import winkeyer
+    WINKEYER_AVAILABLE = True
+except ImportError:
+    WINKEYER_AVAILABLE = False
+    print("Warning: winkeyer module not found. CW functionality will be disabled.")
+
 # --- Logging / debug mode ---
 DEBUG_MODE = ("--debug" in sys.argv)
 logging.basicConfig(level=logging.DEBUG if DEBUG_MODE else logging.INFO)
@@ -181,13 +189,33 @@ def validate_stored_playback(cfg_audio_out):
         return False
 
 
-def ensure_audio_config(force_reconfigure: bool = False):
+def validate_stored_winkeyer(cfg_wk):
     """
-    Ensure we have capture (audio_in) and playback (audio_out) devices configured.
+    Validate stored WinKeyer port still exists.
+    """
+    if not WINKEYER_AVAILABLE:
+        return False
+
+    port = cfg_wk.get("port") if cfg_wk else None
+    if not port:
+        return False
+
+    try:
+        import serial.tools.list_ports
+        ports = serial.tools.list_ports.comports()
+        return any(p.device == port for p in ports)
+    except Exception:
+        return False
+
+
+def ensure_audio_config(force_reconfigure: bool = False, configure_winkeyer: bool = False):
+    """
+    Ensure we have capture (audio_in), playback (audio_out), and optionally WinKeyer configured.
     Config shape:
       {
         "audio_in":  { "name": "...", "index": N },
-        "audio_out": { "name": "...", "index": N }
+        "audio_out": { "name": "...", "index": N },
+        "winkeyer":  { "port": "/dev/...", "description": "..." }
       }
     """
     cfg = load_config()
@@ -255,6 +283,52 @@ def ensure_audio_config(force_reconfigure: bool = False):
     else:
         print(f"Using configured output: {cfg['audio_out']['name']} (index {cfg['audio_out']['index']})")
 
+    # ---------- Ensure WINKEYER (optional) ----------
+    if WINKEYER_AVAILABLE:
+        need_wk = (
+                configure_winkeyer or
+                (configure_winkeyer and "winkeyer" in cfg and not validate_stored_winkeyer(cfg.get("winkeyer")))
+        )
+
+        if need_wk:
+            if sys.stdin.isatty():
+                selected_port = winkeyer.prompt_select_winkeyer_port()
+                if selected_port:
+                    # Get description for the selected port
+                    ports = winkeyer.enumerate_winkeyer_ports()
+                    desc = "USB Serial"
+                    for p in ports:
+                        if p["port"] == selected_port:
+                            desc = p["description"]
+                            break
+
+                    cfg["winkeyer"] = {
+                        "port": selected_port,
+                        "description": desc
+                    }
+                    changed = True
+                    print(f"WinKeyer configured: {selected_port} ({desc})")
+                else:
+                    # User declined WinKeyer
+                    if "winkeyer" in cfg:
+                        del cfg["winkeyer"]
+                        changed = True
+                    print("WinKeyer not configured (skipped by user)")
+            else:
+                print("Cannot configure WinKeyer: not running in interactive terminal")
+        else:
+            # Check if WinKeyer is configured and valid
+            if "winkeyer" in cfg:
+                if validate_stored_winkeyer(cfg["winkeyer"]):
+                    print(f"WinKeyer configured: {cfg['winkeyer']['port']} ({cfg['winkeyer']['description']})")
+                else:
+                    print(f"WinKeyer port no longer available: {cfg['winkeyer']['port']}")
+                    print("  (use --configure-winkeyer to reconfigure)")
+            else:
+                print("WinKeyer not configured (use --configure-winkeyer to set up)")
+    else:
+        print("WinKeyer module not available (CW functionality disabled)")
+
     if changed:
         save_config(cfg)
 
@@ -262,9 +336,10 @@ def ensure_audio_config(force_reconfigure: bool = False):
 
 # Optional CLI flag to force reconfiguration: --reconfigure-audio
 FORCE_RECONFIG = ("--reconfigure-audio" in sys.argv)
+CONFIGURE_WINKEYER = ("--configure-winkeyer" in sys.argv)
 
 # Initialize audio configuration on startup
-AUDIO_CONFIG = ensure_audio_config(force_reconfigure=FORCE_RECONFIG)
+AUDIO_CONFIG = ensure_audio_config(force_reconfigure=FORCE_RECONFIG, configure_winkeyer=CONFIGURE_WINKEYER)
 
 # Optional: set USE_TONE=1 in the environment to send a 1 kHz test tone
 USE_TONE = (os.environ.get("USE_TONE", "0") == "1")
@@ -395,6 +470,18 @@ class FlrigWebRemote:
 
 # Global instance
 flrig_remote = FlrigWebRemote()
+
+# --- Initialize WinKeyer if configured ---
+winkeyer_instance = None
+if WINKEYER_AVAILABLE and "winkeyer" in AUDIO_CONFIG:
+    try:
+        wk_port = AUDIO_CONFIG["winkeyer"]["port"]
+        winkeyer_instance = winkeyer.WinKeyer(port=wk_port, default_wpm=20)
+        winkeyer_instance.connect()
+        print(f"WinKeyer ready on {wk_port}")
+    except Exception as e:
+        print(f"Failed to initialize WinKeyer: {e}")
+        winkeyer_instance = None
 
 # --- WebRTC (aiortc) state and helpers ---
 pcs = set()
@@ -834,16 +921,16 @@ def handle_band_select(data):
     GEN goes to 830 kHz AM broadcast.
     """
     band = str(data.get('band', '')).strip()
-    if not band:
+    if not band or band == '--':
         emit('band_selected', {'success': False, 'error': 'Missing band'})
         return
 
     # Requested mappings
     centers = {
-        # "1.8":  {"freq": 1900000,  "mode": "LSB"},  # skipped per user
+        "1.8":   {"freq": 1900000,   "mode": "LSB"},
         "3.5":   {"freq": 3900000,   "mode": "LSB"},
         "7":     {"freq": 7237500,   "mode": "LSB"},
-        # "10":  {"freq": 10136000,  "mode": "USB"},  # skipped (no phone)
+        "10":    {"freq": 10136000,  "mode": "USB"},
         "14":    {"freq": 14300000,  "mode": "USB"},
         "18":    {"freq": 18139000,  "mode": "USB"},
         "21":    {"freq": 21362500,  "mode": "USB"},
@@ -929,7 +1016,6 @@ def handle_set_mode(data):
     except Exception as e:
         emit('mode_set', {'success': False, 'error': str(e)})
 
-# --- Add: temporary debug to verify mode control path ---
 @socketio.on('debug_probe_modes')
 def handle_debug_probe_modes(_data=None):
     subset = ['LSB', 'USB', 'CW', 'AM', 'PKT-L', 'PKT-U']
@@ -963,6 +1049,95 @@ def handle_debug_probe_modes(_data=None):
         emit('debug_probe_modes_result', {'success': True, 'results': results})
     except Exception as e:
         emit('debug_probe_modes_result', {'success': False, 'error': str(e)})
+
+
+# --- CW Keyer Control (WinKeyer) ---
+@socketio.on('send_cw')
+def handle_send_cw(data):
+    """
+    Send CW message via WinKeyer.
+    Data: { "message": "text to send", "wpm": optional speed }
+    """
+    if not WINKEYER_AVAILABLE:
+        emit('cw_sent', {'success': False, 'error': 'WinKeyer module not available'})
+        return
+
+    if not winkeyer_instance or not winkeyer_instance.connected:
+        emit('cw_sent', {'success': False, 'error': 'WinKeyer not connected'})
+        return
+
+    try:
+        message = data.get('message', '').strip()
+        wpm = data.get('wpm')  # optional
+
+        if not message:
+            emit('cw_sent', {'success': False, 'error': 'Empty message'})
+            return
+
+        success, estimated_time = winkeyer_instance.send_message(message, wpm=wpm)
+        emit('cw_sent', {
+            'success': True,
+            'message': message,
+            'estimated_time': estimated_time
+        })
+
+    except Exception as e:
+        emit('cw_sent', {'success': False, 'error': str(e)})
+
+
+@socketio.on('abort_cw')
+def handle_abort_cw(_data=None):
+    """Abort current CW transmission."""
+    if winkeyer_instance and winkeyer_instance.connected:
+        try:
+            winkeyer_instance.abort()
+            emit('cw_aborted', {'success': True})
+        except Exception as e:
+            emit('cw_aborted', {'success': False, 'error': str(e)})
+    else:
+        emit('cw_aborted', {'success': False, 'error': 'WinKeyer not connected'})
+
+
+@socketio.on('set_cw_speed')
+def handle_set_cw_speed(data):
+    """Change WinKeyer default speed."""
+    if not WINKEYER_AVAILABLE:
+        emit('cw_speed_set', {'success': False, 'error': 'WinKeyer not available'})
+        return
+
+    if not winkeyer_instance or not winkeyer_instance.connected:
+        emit('cw_speed_set', {'success': False, 'error': 'WinKeyer not connected'})
+        return
+
+    try:
+        wpm = int(data.get('wpm', 18))
+        winkeyer_instance.default_wpm = wpm
+        winkeyer_instance.set_speed(wpm)
+        emit('cw_speed_set', {'success': True, 'wpm': wpm})
+        print(f"CW speed changed to {wpm} WPM")
+    except Exception as e:
+        emit('cw_speed_set', {'success': False, 'error': str(e)})
+
+
+@app.route('/api/winkeyer/status')
+def api_winkeyer_status():
+    """API endpoint to check WinKeyer status."""
+    if not WINKEYER_AVAILABLE:
+        return jsonify({'available': False, 'reason': 'Module not loaded'})
+
+    if winkeyer_instance and winkeyer_instance.connected:
+        return jsonify({
+            'available': True,
+            'connected': True,
+            'port': winkeyer_instance.port,
+            'firmware': f"0x{winkeyer_instance.firmware_version:02x}" if winkeyer_instance.firmware_version else "unknown"
+        })
+    else:
+        return jsonify({
+            'available': True,
+            'connected': False,
+            'reason': 'Not configured or connection failed'
+        })
 
 # ------------- Audio: WebRTC (Opus) -------------
 @app.post('/api/webrtc/offer')

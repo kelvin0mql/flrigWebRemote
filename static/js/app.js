@@ -51,7 +51,6 @@ const lastUpdate = document.getElementById('last-update');
 const frequencyA = document.getElementById('frequency-a');
 
 const pwrValue = document.getElementById('pwr-value');
-const swrValue = document.getElementById('swr-value');
 
 // Control buttons
 const tuneBtn = document.getElementById('tune-btn');
@@ -65,6 +64,9 @@ const disconnectAudioBtn = document.getElementById('disconnect-audio');
 // Mode dropdown (compact subset)
 const modeSelect = document.getElementById('mode-select');
 const MODE_SUBSET = ['LSB','USB','CW','AM','PKT-L','PKT-U'];
+
+// Band dropdown
+const bandSelect = document.getElementById('band-select');
 
 // Frequency limits (Hz)
 const MIN_FREQ_HZ = 30000;      // 30 kHz: typical HF rig lower limit
@@ -125,6 +127,23 @@ function wireExtrasA() {
       const cmd = parseInt(btn.getAttribute('data-cmd'), 10);
       if (!Number.isInteger(cmd)) return;
       socket.emit('user_button', { cmd });
+    });
+  });
+}
+
+// Wire CW buttons
+function wireCWButtons() {
+  document.querySelectorAll('.cw-btn').forEach(btn => {
+    btn.addEventListener('click', function() {
+      const message = this.getAttribute('data-message');
+      socket.emit('send_cw', { message: message });
+    });
+  });
+
+  document.querySelectorAll('.cw-speed-btn').forEach(btn => {
+    btn.addEventListener('click', function() {
+      const wpm = parseInt(this.getAttribute('data-wpm'), 10);
+      socket.emit('set_cw_speed', { wpm: wpm });
     });
   });
 }
@@ -243,7 +262,7 @@ async function startWebRTC() {
 
   // If mic was enabled before connect, add a send track now
   try {
-  if (window.micEnabled && typeof micStream !== 'undefined' && micStream) {
+    if (window.micEnabled && typeof micStream !== 'undefined' && micStream) {
       const micTrack = micStream.getAudioTracks && micStream.getAudioTracks()[0];
       if (micTrack) {
         pc.addTrack(micTrack);
@@ -360,6 +379,16 @@ socket.on('mode_set', (data) => {
   }
 });
 
+// Listen for CW sent confirmation
+socket.on('cw_sent', function(data) {
+  if (data.success) {
+    console.log('CW sent:', data.message);
+  } else {
+    console.error('CW error:', data.error);
+    alert('CW Error: ' + data.error);
+  }
+});
+
 function updateDisplay(data) {
   // Connection status
   if (data.connected) {
@@ -384,18 +413,7 @@ function updateDisplay(data) {
     }
   }
 
-  // PWR and SWR inline
   pwrValue.textContent = data.power;
-  const swr = Number(data.swr || 0);
-  swrValue.textContent = swr.toFixed(1);
-  swrValue.classList.remove('swr-ok', 'swr-warn', 'swr-bad');
-  if (swr > 2.0) {
-    swrValue.classList.add('swr-bad');
-  } else if (swr > 1.5) {
-    swrValue.classList.add('swr-warn');
-  } else {
-    swrValue.classList.add('swr-ok');
-  }
 }
 
 function updateClickableFrequency(freqKHz) {
@@ -786,13 +804,23 @@ document.addEventListener('DOMContentLoaded', function() {
   // Wire up other UI elements
   wireBandButtons();
   wireExtrasA();
+  wireCWButtons();
 
+  // Mode dropdown handler
   if (modeSelect) {
     modeSelect.addEventListener('change', () => {
       const m = modeSelect.value;
       if (MODE_SUBSET.includes(m)) {
         socket.emit('set_mode', { mode: m });
       }
+    });
+  }
+
+  // Band dropdown handler
+  if (bandSelect) {
+    bandSelect.addEventListener('change', function() {
+      const band = this.value;
+      socket.emit('band_select', { band: band });
     });
   }
 
