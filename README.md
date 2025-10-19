@@ -24,9 +24,9 @@ I've done the cert thing. Sent the CA to the iOS device using AirDrop, which bec
 audio to work well... only a little. And the latency gradually increases, pretty quickly becoming
 too slow to be viable for a conversation.
 
-**Therefore** what I do instead for TX audio is to shut off my APRS station, instead using that
+**Therefore** what I did instead for TX audio was to shut off my APRS station, instead using that
 2-meter transceiver on a Simplex frequency, and transmit to it from an HT in the shed. The speaker
-out of the 2-meter rig plugs into the Line In of the HF rig, and the HF rig has VOX turned on. I've
+out of the 2-meter rig plugged into the Line In of the HF rig, and the HF rig had VOX turned on. I'd
 operated cross-band like this before, but what wasn't so smooth was the controlling of the HF radio.
 Was using one or another remote-screen-control software (AnyDesk, TeamViewer, et al). The problem
 with that is that trying to control flrig that way is... ooky. So this web app simplifies a lot of
