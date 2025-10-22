@@ -28,6 +28,62 @@ except ImportError:
 
 # --- Logging / debug mode ---
 DEBUG_MODE = ("--debug" in sys.argv)
+
+# Show help if requested
+if "--help" in sys.argv or "-h" in sys.argv:
+    print("""
+flrigWebRemote Server
+=====================
+
+A web-based remote control for amateur radio rigs via flrig, with WebRTC audio
+streaming and optional WinKeyer CW support.
+
+Usage:
+    python3 flrigWebRemote-server.py [OPTIONS]
+
+Options:
+    -h, --help              Show this help message and exit
+    --debug                 Enable verbose debug logging to console and debug.log
+    --reconfigure-audio     Interactively select audio input/output devices
+    --configure-winkeyer    Interactively select USB serial port for WinKeyer
+
+Environment Variables:
+    USE_TONE=1              Generate 1 kHz test tone instead of capturing radio audio
+                            (useful for testing WebRTC without a radio connected)
+
+Configuration:
+    Settings are stored in: flrigWebRemote.config.json
+    - Audio device selections (input/output indices)
+    - WinKeyer serial port configuration
+
+Examples:
+    # Initial setup (first run or new hardware):
+    python3 flrigWebRemote-server.py --reconfigure-audio --configure-winkeyer
+
+    # Reconfigure only audio devices:
+    python3 flrigWebRemote-server.py --reconfigure-audio
+
+    # Reconfigure only WinKeyer port:
+    python3 flrigWebRemote-server.py --configure-winkeyer
+
+    # Run with debug logging:
+    python3 flrigWebRemote-server.py --debug
+
+    # Test WebRTC with synthetic audio:
+    USE_TONE=1 python3 flrigWebRemote-server.py
+
+Requirements:
+    - flrig running and accessible at http://192.168.1.29:12345
+    - Python packages: flask, flask-socketio, sounddevice, av, aiortc
+    - For WinKeyer support: pyserial package and winkeyer.py module
+
+Notes:
+    - HTTPS is automatically enabled if certs/server/server.crt and server.key exist
+    - Server listens on all interfaces (0.0.0.0) port 5000
+    - WebRTC audio requires HTTPS for remote access (use self-signed cert for LAN)
+    """)
+    sys.exit(0)
+
 logging.basicConfig(level=logging.DEBUG if DEBUG_MODE else logging.INFO)
 logging.getLogger("werkzeug").setLevel(logging.DEBUG if DEBUG_MODE else logging.WARNING)
 logging.getLogger("engineio").setLevel(logging.DEBUG if DEBUG_MODE else logging.WARNING)
@@ -235,8 +291,9 @@ def ensure_audio_config(force_reconfigure: bool = False, configure_winkeyer: boo
             print("No input-capable audio devices found. Proceeding without audio_in configuration.")
         else:
             picked_in = None
-            # Only prompt if explicitly reconfiguring; otherwise auto-pick to avoid blocking
-            if force_reconfigure and sys.stdin.isatty():
+            # Prompt if force_reconfigure OR if no valid config exists
+            # Remove the isatty() check - always prompt when explicitly requested
+            if force_reconfigure:
                 picked_in = prompt_select_device(in_list, title="input")
             else:
                 picked_in = auto_pick_device(in_list)
@@ -266,8 +323,9 @@ def ensure_audio_config(force_reconfigure: bool = False, configure_winkeyer: boo
             print("No output-capable audio devices found. Proceeding without audio_out configuration.")
         else:
             picked_out = None
-            # Only prompt if explicitly reconfiguring; otherwise auto-pick to avoid blocking
-            if force_reconfigure and sys.stdin.isatty():
+            # Prompt if force_reconfigure OR if no valid config exists
+            # Remove the isatty() check - always prompt when explicitly requested
+            if force_reconfigure:
                 picked_out = prompt_select_device(out_list, title="output")
             else:
                 picked_out = auto_pick_device(out_list)
@@ -291,31 +349,29 @@ def ensure_audio_config(force_reconfigure: bool = False, configure_winkeyer: boo
         )
 
         if need_wk:
-            if sys.stdin.isatty():
-                selected_port = winkeyer.prompt_select_winkeyer_port()
-                if selected_port:
-                    # Get description for the selected port
-                    ports = winkeyer.enumerate_winkeyer_ports()
-                    desc = "USB Serial"
-                    for p in ports:
-                        if p["port"] == selected_port:
-                            desc = p["description"]
-                            break
+            # Always prompt when configure_winkeyer is True (user explicitly requested it)
+            selected_port = winkeyer.prompt_select_winkeyer_port()
+            if selected_port:
+                # Get description for the selected port
+                ports = winkeyer.enumerate_winkeyer_ports()
+                desc = "USB Serial"
+                for p in ports:
+                    if p["port"] == selected_port:
+                        desc = p["description"]
+                        break
 
-                    cfg["winkeyer"] = {
-                        "port": selected_port,
-                        "description": desc
-                    }
-                    changed = True
-                    print(f"WinKeyer configured: {selected_port} ({desc})")
-                else:
-                    # User declined WinKeyer
-                    if "winkeyer" in cfg:
-                        del cfg["winkeyer"]
-                        changed = True
-                    print("WinKeyer not configured (skipped by user)")
+                cfg["winkeyer"] = {
+                    "port": selected_port,
+                    "description": desc
+                }
+                changed = True
+                print(f"WinKeyer configured: {selected_port} ({desc})")
             else:
-                print("Cannot configure WinKeyer: not running in interactive terminal")
+                # User declined WinKeyer
+                if "winkeyer" in cfg:
+                    del cfg["winkeyer"]
+                    changed = True
+                print("WinKeyer not configured (skipped by user)")
         else:
             # Check if WinKeyer is configured and valid
             if "winkeyer" in cfg:
