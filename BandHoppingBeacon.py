@@ -29,7 +29,7 @@ except ImportError:
 # Configuration
 FLRIG_HOST = "192.168.1.29"
 FLRIG_PORT = 12345
-BEACON_MESSAGE = "CQ N0MQL/B K"
+BEACON_MESSAGE = "CQ TEST N0MQL N0MQL"
 CW_SPEED_WPM = 20
 INTER_BAND_DELAY = 60  # seconds between bands
 
@@ -38,9 +38,9 @@ BANDS = [
     {"name": "160m", "range": (1.800, 1.830), "antenna": 2},
     {"name": "80m", "range": (3.525, 3.600), "antenna": 1},
     {"name": "60m", "freqs": [5.332, 5.348, 5.3585, 5.373, 5.405], "antenna": 2},
-    {"name": "40m", "range": (7.025, 7.125), "antenna": 1},
+    {"name": "40m", "range": (7.025, 7.074), "antenna": 1},
     {"name": "30m", "range": (10.100, 10.150), "antenna": 1},
-    {"name": "20m", "range": (14.025, 14.150), "antenna": 1},
+    {"name": "20m", "range": (14.025, 14.074), "antenna": 1},
     {"name": "17m", "range": (18.068, 18.110), "antenna": 1},
     {"name": "15m", "range": (21.025, 21.200), "antenna": 1},
     {"name": "12m", "range": (24.890, 24.930), "antenna": 1},
