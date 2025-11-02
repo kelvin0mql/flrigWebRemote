@@ -160,12 +160,20 @@ class BandHoppingBeacon:
             success, estimated_time = self.wk.send_message(BEACON_MESSAGE)
             if success:
                 print(f"  ✓ Beacon transmission started (est. {estimated_time:.1f}s)")
-                # Wait for transmission to complete
-                time.sleep(estimated_time)
+                # Wait for transmission to complete, but allow interruption
+                try:
+                    time.sleep(estimated_time)
+                except KeyboardInterrupt:
+                    # Abort the transmission immediately
+                    print(f"\n  ⚠ Transmission interrupted, aborting...")
+                    self.wk.abort()
+                    raise  # Re-raise to propagate to main loop
                 return True
             else:
                 print(f"  ✗ Failed to send CW")
                 return False
+        except KeyboardInterrupt:
+            raise  # Re-raise to propagate
         except Exception as e:
             print(f"  ✗ Failed to send CW: {e}")
             return False
