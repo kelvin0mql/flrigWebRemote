@@ -73,7 +73,7 @@ Examples:
     USE_TONE=1 python3 flrigWebRemote-server.py
 
 Requirements:
-    - flrig running and accessible at http://192.168.1.29:12345
+    - flrig running and accessible at http://192.168.1.49:12345
     - Python packages: flask, flask-socketio, sounddevice, av, aiortc
     - For WinKeyer support: pyserial package and winkeyer.py module
 
@@ -105,7 +105,7 @@ app.config['SECRET_KEY'] = 'flrig-web-remote-secret'
 socketio = SocketIO(app, cors_allowed_origins="*", logger=DEBUG_MODE, engineio_logger=DEBUG_MODE)
 
 # flrig connection settings
-FLRIG_HOST = "192.168.1.29"
+FLRIG_HOST = "192.168.1.49"
 FLRIG_PORT = 12345
 server_url = f"http://{FLRIG_HOST}:{FLRIG_PORT}/RPC2"
 
