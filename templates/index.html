@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>flrig Web Remote</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}?v=1">
 </head>
 <body>
 <div class="container-fluid">
@@ -30,13 +30,28 @@
                 </div>
             </div>
 
-            <!-- Compact metrics bar: PWR | SWR | MODE -->
+            <!-- Compact metrics bar: PWR | BAND | MODE -->
             <div class="metrics-inline mb-2">
                 <div class="metrics-inline-item">PWR: <span id="pwr-value">0</span></div>
-                <div class="metrics-inline-item">SWR: <span id="swr-value">0.0</span></div>
                 <div class="metrics-inline-item">
-                    MODE:
-                    <select id="mode-select" class="form-select form-select-sm d-inline-block ms-1">
+                    BAND:
+                    <select id="band-select" class="form-select form-select-sm d-inline-block ms-1" style="width: 85px;">
+                        <option value="" selected>--</option>
+                        <option value="1.8">160m</option>
+                        <option value="3.5">80m</option>
+                        <option value="7">40m</option>
+                        <option value="10">30m</option>
+                        <option value="14">20m</option>
+                        <option value="18">17m</option>
+                        <option value="21">15m</option>
+                        <option value="24">12m</option>
+                        <option value="28">10m</option>
+                        <option value="50">6m</option>
+                        <option value="GEN">GEN</option>
+                    </select>
+                </div>
+                <div class="metrics-inline-item">
+                    <select id="mode-select" class="form-select form-select-sm d-inline-block" style="width: 95px;">
                         <option value="LSB">LSB</option>
                         <option value="USB">USB</option>
                         <option value="CW">CW</option>
@@ -53,47 +68,33 @@
                 <div class="d-inline-flex align-items-center gap-2">
                     <button id="connect-audio" class="btn btn-outline-secondary">Connect Audio</button>
                     <button id="disconnect-audio" class="btn btn-outline-secondary">Disconnect</button>
-                    <button id="enable-mic" class="btn btn-outline-secondary">Mic</button>
+                </div>
+                <div class="d-inline-flex align-items-center gap-2 mt-2">
+                    <button id="enable-mic" class="btn btn-outline-secondary">Connect Mic</button>
+                    <button id="disable-mic" class="btn btn-outline-secondary">Disconnect Mic</button>
                 </div>
             </div>
 
-            <!-- Band Buttons -->
-            <div class="band-buttons mb-4">
-                <h5>Band</h5>
-                <div class="row">
-<!--                    <div class="col-6 col-md-2 mb-2">-->
-<!--                        <button class="btn btn-outline-secondary w-100 band-btn" data-band="1.8">1.8</button>-->
-<!--                    </div>-->
-                    <div class="col-6 col-md-2 mb-2">
-                        <button class="btn btn-outline-secondary w-100 band-btn" data-band="3.5">3.5</button>
-                    </div>
-                    <div class="col-6 col-md-2 mb-2">
-                        <button class="btn btn-outline-secondary w-100 band-btn" data-band="7">7</button>
-                    </div>
-<!--                    <div class="col-6 col-md-2 mb-2">-->
-<!--                        <button class="btn btn-outline-secondary w-100 band-btn" data-band="10">10</button>-->
-<!--                    </div>-->
-                    <div class="col-6 col-md-2 mb-2">
-                        <button class="btn btn-outline-secondary w-100 band-btn" data-band="14">14</button>
-                    </div>
-                    <div class="col-6 col-md-2 mb-2">
-                        <button class="btn btn-outline-secondary w-100 band-btn" data-band="18">18</button>
-                    </div>
-                    <div class="col-6 col-md-2 mb-2">
-                        <button class="btn btn-outline-secondary w-100 band-btn" data-band="21">21</button>
-                    </div>
-                    <div class="col-6 col-md-2 mb-2">
-                        <button class="btn btn-outline-secondary w-100 band-btn" data-band="24">24</button>
-                    </div>
-                    <div class="col-6 col-md-2 mb-2">
-                        <button class="btn btn-outline-secondary w-100 band-btn" data-band="28">28</button>
-                    </div>
-                    <div class="col-6 col-md-2 mb-2">
-                        <button class="btn btn-outline-secondary w-100 band-btn" data-band="50">50</button>
-                    </div>
-                    <div class="col-6 col-md-2 mb-2">
-                        <button class="btn btn-outline-secondary w-100 band-btn" data-band="GEN">GEN</button>
-                    </div>
+            <!-- Debug Log -->
+            <!-- <div id="debugLog" style="position: fixed; bottom: 0; left: 0; right: 0; max-height: 200px; overflow-y: scroll; background: rgba(0,0,0,0.9); color: #0f0; font-family: monospace; font-size: 11px; padding: 8px; z-index: 9999; border-top: 2px solid #0f0;"></div>
+            <button onclick="alert('rxAudioEl=' + (typeof rxAudioEl !== 'undefined' ? 'exists' : 'undefined'))" class="btn btn-sm btn-warning mb-2">Test Debug</button>-->
+
+            <!-- CW Keyer Buttons -->
+            <div class="mb-4 cw-keyer">
+                <h5>CW Keyer</h5>
+                <div class="row g-2">
+                    <div class="col-6 col-md-2"><button class="btn btn-outline-success w-100 cw-btn" data-message="N0MQL">MyCall</button></div>
+                    <div class="col-6 col-md-2"><button class="btn btn-outline-success w-100 cw-btn" data-message="TU 5NN 5NN MN MN BK">TU5n</button></div>
+                    <div class="col-6 col-md-2"><button class="btn btn-outline-success w-100 cw-btn" data-message="TU 55N 55N MN MN BK">TU55</button></div>
+                    <div class="col-6 col-md-2"><button class="btn btn-outline-success w-100 cw-btn" data-message="TU 53N 53N MN MN BK">TU53</button></div>
+                    <div class="col-6 col-md-2"><button class="btn btn-outline-success w-100 cw-btn" data-message="73 EE">73..</button></div>
+                    <div class="col-6 col-md-2"><button class="btn btn-outline-success w-100 cw-btn" data-message="EE">..</button></div>
+                </div>
+                <div class="row g-2 mt-2">
+                    <div class="col-3"><button class="btn btn-outline-dark w-100 cw-speed-btn" data-wpm="24">24WPM</button></div>
+                    <div class="col-3"><button class="btn btn-outline-dark w-100 cw-speed-btn" data-wpm="20">20WPM</button></div>
+                    <div class="col-3"><button class="btn btn-outline-dark w-100 cw-speed-btn" data-wpm="18">18WPM</button></div>
+                    <div class="col-3"><button class="btn btn-outline-dark w-100 cw-speed-btn" data-wpm="15">15WPM</button></div>
                 </div>
             </div>
 

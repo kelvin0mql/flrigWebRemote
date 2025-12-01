@@ -12,14 +12,78 @@ import re
 import asyncio
 import logging
 from fractions import Fraction
-
+import sounddevice as sd
 import av
 from av.audio.resampler import AudioResampler
 import math
 from aiortc import RTCPeerConnection, RTCSessionDescription, MediaStreamTrack
 
+# Import WinKeyer module
+try:
+    import winkeyer
+    WINKEYER_AVAILABLE = True
+except ImportError:
+    WINKEYER_AVAILABLE = False
+    print("Warning: winkeyer module not found. CW functionality will be disabled.")
+
 # --- Logging / debug mode ---
 DEBUG_MODE = ("--debug" in sys.argv)
+
+# Show help if requested
+if "--help" in sys.argv or "-h" in sys.argv:
+    print("""
+flrigWebRemote Server
+=====================
+
+A web-based remote control for amateur radio rigs via flrig, with WebRTC audio
+streaming and optional WinKeyer CW support.
+
+Usage:
+    python3 flrigWebRemote-server.py [OPTIONS]
+
+Options:
+    -h, --help              Show this help message and exit
+    --debug                 Enable verbose debug logging to console and debug.log
+    --reconfigure-audio     Interactively select audio input/output devices
+    --configure-winkeyer    Interactively select USB serial port for WinKeyer
+
+Environment Variables:
+    USE_TONE=1              Generate 1 kHz test tone instead of capturing radio audio
+                            (useful for testing WebRTC without a radio connected)
+
+Configuration:
+    Settings are stored in: flrigWebRemote.config.json
+    - Audio device selections (input/output indices)
+    - WinKeyer serial port configuration
+
+Examples:
+    # Initial setup (first run or new hardware):
+    python3 flrigWebRemote-server.py --reconfigure-audio --configure-winkeyer
+
+    # Reconfigure only audio devices:
+    python3 flrigWebRemote-server.py --reconfigure-audio
+
+    # Reconfigure only WinKeyer port:
+    python3 flrigWebRemote-server.py --configure-winkeyer
+
+    # Run with debug logging:
+    python3 flrigWebRemote-server.py --debug
+
+    # Test WebRTC with synthetic audio:
+    USE_TONE=1 python3 flrigWebRemote-server.py
+
+Requirements:
+    - flrig running and accessible at http://192.168.1.29:12345
+    - Python packages: flask, flask-socketio, sounddevice, av, aiortc
+    - For WinKeyer support: pyserial package and winkeyer.py module
+
+Notes:
+    - HTTPS is automatically enabled if certs/server/server.crt and server.key exist
+    - Server listens on all interfaces (0.0.0.0) port 5000
+    - WebRTC audio requires HTTPS for remote access (use self-signed cert for LAN)
+    """)
+    sys.exit(0)
+
 logging.basicConfig(level=logging.DEBUG if DEBUG_MODE else logging.INFO)
 logging.getLogger("werkzeug").setLevel(logging.DEBUG if DEBUG_MODE else logging.WARNING)
 logging.getLogger("engineio").setLevel(logging.DEBUG if DEBUG_MODE else logging.WARNING)
@@ -41,11 +105,11 @@ app.config['SECRET_KEY'] = 'flrig-web-remote-secret'
 socketio = SocketIO(app, cors_allowed_origins="*", logger=DEBUG_MODE, engineio_logger=DEBUG_MODE)
 
 # flrig connection settings
-FLRIG_HOST = "localhost"
+FLRIG_HOST = "192.168.1.29"
 FLRIG_PORT = 12345
 server_url = f"http://{FLRIG_HOST}:{FLRIG_PORT}/RPC2"
 
-# --- Audio configuration (ALSA only) ---
+# --- Audio configuration ---
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(SCRIPT_DIR, "flrigWebRemote.config.json")
 
@@ -68,89 +132,69 @@ def save_config(cfg: dict):
     except Exception as e:
         print(f"Error saving config: {e}")
 
-
-def enumerate_input_devices_alsa():
+def enumerate_input_devices():
     """
-    Use 'arecord -l' to list input-capable ALSA devices.
-    Returns list of dicts: { 'card': int, 'device': int, 'name': str, 'alsa_device': 'plughw:card,device' }
+    Use sounddevice to list input-capable audio devices (cross-platform).
+    Returns list of dicts: { 'index': int, 'name': str, 'channels': int, 'sample_rate': int }
     """
     devices = []
     try:
-        out = subprocess.check_output(["arecord", "-l"], stderr=subprocess.STDOUT, text=True)
+        device_list = sd.query_devices()
+        for i, info in enumerate(device_list):
+            if info['max_input_channels'] > 0:
+                devices.append({
+                    "index": i,
+                    "name": info['name'],
+                    "channels": info['max_input_channels'],
+                    "sample_rate": int(info['default_samplerate']),
+                    "host_api": sd.query_hostapis(info['hostapi'])['name']
+                })
     except Exception as e:
-        print(f"ALSA enumeration failed (arecord -l): {e}")
+        print(f"Audio enumeration failed (sounddevice): {e}")
         return devices
 
-    # Example:
-    # card 1: Device [USB PnP Sound Device], device 0: USB Audio [USB Audio]
-    pattern = re.compile(r"card\s+(\d+):\s+([^\[]+)\[([^\]]+)\],\s+device\s+(\d+):\s+([^\[]+)\[([^\]]+)\]")
-    for line in out.splitlines():
-        m = pattern.search(line)
-        if not m:
-            continue
-        card_num = int(m.group(1))
-        card_name = m.group(3).strip()
-        dev_num = int(m.group(4))
-        dev_name = m.group(6).strip()
-        display_name = f"{card_name} / {dev_name}".strip()
-        alsa_dev = f"plughw:{card_num},{dev_num}"
-        devices.append({
-            "card": card_num,
-            "device": dev_num,
-            "name": display_name,
-            "alsa_device": alsa_dev
-        })
-
-    # Prefer USB devices first
-    devices.sort(key=lambda d: (0 if "usb" in d["name"].lower() else 1, d["card"], d["device"]))
+    # Prefer USB devices first, then by index
+    devices.sort(key=lambda d: (0 if "usb" in d["name"].lower() else 1, d["index"]))
     return devices
 
 
-def enumerate_playback_devices_alsa():
+def enumerate_playback_devices():
     """
-    Use 'aplay -l' to list output-capable ALSA devices.
-    Returns list of dicts: { 'card': int, 'device': int, 'name': str, 'alsa_device': 'plughw:card,device' }
+    Use sounddevice to list output-capable audio devices (cross-platform).
+    Returns list of dicts: { 'index': int, 'name': str, 'channels': int, 'sample_rate': int }
     """
     devices = []
     try:
-        out = subprocess.check_output(["aplay", "-l"], stderr=subprocess.STDOUT, text=True)
+        device_list = sd.query_devices()
+        for i, info in enumerate(device_list):
+            if info['max_output_channels'] > 0:
+                devices.append({
+                    "index": i,
+                    "name": info['name'],
+                    "channels": info['max_output_channels'],
+                    "sample_rate": int(info['default_samplerate']),
+                    "host_api": sd.query_hostapis(info['hostapi'])['name']
+                })
     except Exception as e:
-        print(f"ALSA enumeration failed (aplay -l): {e}")
+        print(f"Audio enumeration failed (sounddevice): {e}")
         return devices
 
-    pattern = re.compile(r"card\s+(\d+):\s+([^\[]+)\[([^\]]+)\],\s+device\s+(\d+):\s+([^\[]+)\[([^\]]+)\]")
-    for line in out.splitlines():
-        m = pattern.search(line)
-        if not m:
-            continue
-        card_num = int(m.group(1))
-        card_name = m.group(3).strip()
-        dev_num = int(m.group(4))
-        dev_name = m.group(6).strip()
-        display_name = f"{card_name} / {dev_name}".strip()
-        alsa_dev = f"plughw:{card_num},{dev_num}"
-        devices.append({
-            "card": card_num,
-            "device": dev_num,
-            "name": display_name,
-            "alsa_device": alsa_dev
-        })
-
-    # Prefer USB devices first
-    devices.sort(key=lambda d: (0 if "usb" in d["name"].lower() else 1, d["card"], d["device"]))
+    # Prefer USB devices first, then by index
+    devices.sort(key=lambda d: (0 if "usb" in d["name"].lower() else 1, d["index"]))
     return devices
 
 
 def prompt_select_device(devices, title="input"):
     """Interactive prompt to select device; returns selected device dict or None."""
     if not devices:
-        print(f"No {title}-capable ALSA devices found.")
+        print(f"No {title}-capable audio devices found.")
         return None
 
-    print(f"\nAvailable {title} audio devices (ALSA):")
+    print(f"\nAvailable {title} audio devices:")
     for i, d in enumerate(devices):
         usb_tag = " [USB]" if "usb" in d["name"].lower() else ""
-        print(f"  {i}) {d['name']}{usb_tag}  -> {d['alsa_device']}")
+        host_api = f" ({d.get('host_api', 'unknown')})" if 'host_api' in d else ""
+        print(f"  {i}) {d['name']}{usb_tag}{host_api}")
 
     while True:
         sel = input(f"Select {title} device number (or press Enter to pick first listed): ").strip()
@@ -169,52 +213,65 @@ def auto_pick_device(devices):
         return None
     return devices[0]
 
-
 def validate_stored_capture(cfg_audio_in):
     """
-    Validate stored ALSA input device by a 1-second silent capture.
+    Validate stored input device by attempting to query it.
     """
-    dev = cfg_audio_in.get("alsa_device") if cfg_audio_in else None
-    if not dev:
+    idx = cfg_audio_in.get("index") if cfg_audio_in else None
+    if idx is None:
         return False
     try:
-        subprocess.run(
-            ["arecord", "-D", dev, "-f", "S16_LE", "-d", "1", "-q", "/dev/null"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=True
-        )
-        return True
+        # Try to query the device
+        info = sd.query_devices(idx)
+        # Verify it still has input channels
+        return info['max_input_channels'] > 0
     except Exception:
         return False
 
 
 def validate_stored_playback(cfg_audio_out):
     """
-    Validate stored ALSA output device by a 1-second silent playback from /dev/zero.
+    Validate stored output device by attempting to query it.
     """
-    dev = cfg_audio_out.get("alsa_device") if cfg_audio_out else None
-    if not dev:
+    idx = cfg_audio_out.get("index") if cfg_audio_out else None
+    if idx is None:
         return False
     try:
-        subprocess.run(
-            ["aplay", "-D", dev, "-f", "S16_LE", "-c", "1", "-r", "48000", "-d", "1", "-q", "/dev/zero"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=True
-        )
-        return True
+        # Try to query the device
+        info = sd.query_devices(idx)
+        # Verify it still has output channels
+        return info['max_output_channels'] > 0
     except Exception:
         return False
 
 
-def ensure_audio_config(force_reconfigure: bool = False):
+def validate_stored_winkeyer(cfg_wk):
     """
-    Ensure we have ALSA capture (audio_in) and playback (audio_out) devices configured.
+    Validate stored WinKeyer port still exists.
+    """
+    if not WINKEYER_AVAILABLE:
+        return False
+
+    port = cfg_wk.get("port") if cfg_wk else None
+    if not port:
+        return False
+
+    try:
+        import serial.tools.list_ports
+        ports = serial.tools.list_ports.comports()
+        return any(p.device == port for p in ports)
+    except Exception:
+        return False
+
+
+def ensure_audio_config(force_reconfigure: bool = False, configure_winkeyer: bool = False):
+    """
+    Ensure we have capture (audio_in), playback (audio_out), and optionally WinKeyer configured.
     Config shape:
       {
-        "audio_in":  { "device_name": "...", "alsa_device": "plughw:X,Y" },
-        "audio_out": { "device_name": "...", "alsa_device": "plughw:X,Y" }
+        "audio_in":  { "name": "...", "index": N },
+        "audio_out": { "name": "...", "index": N },
+        "winkeyer":  { "port": "/dev/...", "description": "..." }
       }
     """
     cfg = load_config()
@@ -224,82 +281,128 @@ def ensure_audio_config(force_reconfigure: bool = False):
     need_in = (
             force_reconfigure or
             ("audio_in" not in cfg) or
-            ("alsa_device" not in cfg.get("audio_in", {})) or
+            ("index" not in cfg.get("audio_in", {})) or
             (not validate_stored_capture(cfg.get("audio_in")))
     )
 
     if need_in:
-        in_list = enumerate_input_devices_alsa()
+        in_list = enumerate_input_devices()
         if not in_list:
-            print("No input-capable ALSA devices found. Proceeding without audio_in configuration.")
+            print("No input-capable audio devices found. Proceeding without audio_in configuration.")
         else:
             picked_in = None
-            # Only prompt if explicitly reconfiguring; otherwise auto-pick to avoid blocking
-            if force_reconfigure and sys.stdin.isatty():
+            # Prompt if force_reconfigure OR if no valid config exists
+            # Remove the isatty() check - always prompt when explicitly requested
+            if force_reconfigure:
                 picked_in = prompt_select_device(in_list, title="input")
             else:
                 picked_in = auto_pick_device(in_list)
                 if picked_in:
-                    print(f"Auto-selected input {picked_in['name']} -> {picked_in['alsa_device']}")
+                    print(f"Auto-selected input: {picked_in['name']} (index {picked_in['index']})")
             if picked_in:
                 cfg["audio_in"] = {
-                    "device_name": picked_in["name"],
-                    "alsa_device": picked_in["alsa_device"]
+                    "name": picked_in["name"],
+                    "index": picked_in["index"]
                 }
                 changed = True
-                print(f"Selected ALSA input: {picked_in['name']} -> {picked_in['alsa_device']}")
+                print(f"Selected input: {picked_in['name']} (index {picked_in['index']})")
     else:
-        print(f"Using configured ALSA input: {cfg['audio_in']['device_name']} -> {cfg['audio_in']['alsa_device']}")
+        print(f"Using configured input: {cfg['audio_in']['name']} (index {cfg['audio_in']['index']})")
 
     # ---------- Ensure PLAYBACK device (audio_out) ----------
     need_out = (
             force_reconfigure or
             ("audio_out" not in cfg) or
-            ("alsa_device" not in cfg.get("audio_out", {})) or
+            ("index" not in cfg.get("audio_out", {})) or
             (not validate_stored_playback(cfg.get("audio_out")))
     )
 
     if need_out:
-        out_list = enumerate_playback_devices_alsa()
+        out_list = enumerate_playback_devices()
         if not out_list:
-            print("No output-capable ALSA devices found. Proceeding without audio_out configuration.")
+            print("No output-capable audio devices found. Proceeding without audio_out configuration.")
         else:
             picked_out = None
-            # Only prompt if explicitly reconfiguring; otherwise auto-pick to avoid blocking
-            if force_reconfigure and sys.stdin.isatty():
+            # Prompt if force_reconfigure OR if no valid config exists
+            # Remove the isatty() check - always prompt when explicitly requested
+            if force_reconfigure:
                 picked_out = prompt_select_device(out_list, title="output")
             else:
                 picked_out = auto_pick_device(out_list)
                 if picked_out:
-                    print(f"Auto-selected output {picked_out['name']} -> {picked_out['alsa_device']}")
+                    print(f"Auto-selected output: {picked_out['name']} (index {picked_out['index']})")
             if picked_out:
                 cfg["audio_out"] = {
-                    "device_name": picked_out["name"],
-                    "alsa_device": picked_out["alsa_device"]
+                    "name": picked_out["name"],
+                    "index": picked_out["index"]
                 }
                 changed = True
-                print(f"Selected ALSA output: {picked_out['name']} -> {picked_out['alsa_device']}")
+                print(f"Selected output: {picked_out['name']} (index {picked_out['index']})")
     else:
-        print(f"Using configured ALSA output: {cfg['audio_out']['device_name']} -> {cfg['audio_out']['alsa_device']}")
+        print(f"Using configured output: {cfg['audio_out']['name']} (index {cfg['audio_out']['index']})")
+
+    # ---------- Ensure WINKEYER (optional) ----------
+    if WINKEYER_AVAILABLE:
+        need_wk = (
+                configure_winkeyer or
+                (configure_winkeyer and "winkeyer" in cfg and not validate_stored_winkeyer(cfg.get("winkeyer")))
+        )
+
+        if need_wk:
+            # Always prompt when configure_winkeyer is True (user explicitly requested it)
+            selected_port = winkeyer.prompt_select_winkeyer_port()
+            if selected_port:
+                # Get description for the selected port
+                ports = winkeyer.enumerate_winkeyer_ports()
+                desc = "USB Serial"
+                for p in ports:
+                    if p["port"] == selected_port:
+                        desc = p["description"]
+                        break
+
+                cfg["winkeyer"] = {
+                    "port": selected_port,
+                    "description": desc
+                }
+                changed = True
+                print(f"WinKeyer configured: {selected_port} ({desc})")
+            else:
+                # User declined WinKeyer
+                if "winkeyer" in cfg:
+                    del cfg["winkeyer"]
+                    changed = True
+                print("WinKeyer not configured (skipped by user)")
+        else:
+            # Check if WinKeyer is configured and valid
+            if "winkeyer" in cfg:
+                if validate_stored_winkeyer(cfg["winkeyer"]):
+                    print(f"WinKeyer configured: {cfg['winkeyer']['port']} ({cfg['winkeyer']['description']})")
+                else:
+                    print(f"WinKeyer port no longer available: {cfg['winkeyer']['port']}")
+                    print("  (use --configure-winkeyer to reconfigure)")
+            else:
+                print("WinKeyer not configured (use --configure-winkeyer to set up)")
+    else:
+        print("WinKeyer module not available (CW functionality disabled)")
 
     if changed:
         save_config(cfg)
 
     return cfg
 
-
 # Optional CLI flag to force reconfiguration: --reconfigure-audio
 FORCE_RECONFIG = ("--reconfigure-audio" in sys.argv)
+CONFIGURE_WINKEYER = ("--configure-winkeyer" in sys.argv)
 
-# Initialize audio configuration on startup (ALSA only)
-AUDIO_CONFIG = ensure_audio_config(force_reconfigure=FORCE_RECONFIG)
+# Initialize audio configuration on startup
+AUDIO_CONFIG = ensure_audio_config(force_reconfigure=FORCE_RECONFIG, configure_winkeyer=CONFIGURE_WINKEYER)
 
 # Optional: set USE_TONE=1 in the environment to send a 1 kHz test tone
 USE_TONE = (os.environ.get("USE_TONE", "0") == "1")
 
 # Audio sample rate for the whole media path (change to 48000 if needed)
-SAMPLE_RATE = 24000
-FRAME_SAMPLES = 480  # 20 ms at 24 kHz
+SAMPLE_RATE = 48000  # Changed from 24000 to match USB device
+FRAME_SAMPLES = 960  # 20 ms at 48 kHz (was 480 for 24 kHz)
 
 class FlrigWebRemote:
     def __init__(self):
@@ -424,6 +527,18 @@ class FlrigWebRemote:
 # Global instance
 flrig_remote = FlrigWebRemote()
 
+# --- Initialize WinKeyer if configured ---
+winkeyer_instance = None
+if WINKEYER_AVAILABLE and "winkeyer" in AUDIO_CONFIG:
+    try:
+        wk_port = AUDIO_CONFIG["winkeyer"]["port"]
+        winkeyer_instance = winkeyer.WinKeyer(port=wk_port, default_wpm=20)
+        winkeyer_instance.connect()
+        print(f"WinKeyer ready on {wk_port}")
+    except Exception as e:
+        print(f"Failed to initialize WinKeyer: {e}")
+        winkeyer_instance = None
+
 # --- WebRTC (aiortc) state and helpers ---
 pcs = set()
 _pc_players = {}  # kept for compatibility; not used by custom track
@@ -436,76 +551,134 @@ def _run_loop(loop):
 _loop_thread = threading.Thread(target=_run_loop, args=(_aiortc_loop,), daemon=True)
 _loop_thread.start()
 
-class FfmpegPcmTrack(MediaStreamTrack):
+class SoundDevicePcmTrack(MediaStreamTrack):
     """
-    Capture from ALSA via ffmpeg, resample to SAMPLE_RATE mono s16, and emit exact
-    20 ms (FRAME_SAMPLES) frames with correct timestamps.
+    Capture mono PCM from audio device using sounddevice at SAMPLE_RATE Hz, s16le,
+    and emit exact 20 ms frames (FRAME_SAMPLES) with proper timestamps.
     """
     kind = "audio"
 
-    def __init__(self, alsa_device: str):
+    def __init__(self, device_index: int):
         super().__init__()
         self.sample_rate = SAMPLE_RATE
         self.channels = 1
         self.samples_per_frame = FRAME_SAMPLES
-        self._frame_bytes = self.samples_per_frame * self.channels * 2  # s16 mono
+        self._frame_bytes = self.samples_per_frame * self.channels * 2  # s16
         self._closed = False
-        self._buffer = bytearray()
-        # Timestamp state
         self._time_base = Fraction(1, self.sample_rate)
         self._pts = 0
+        self._buffer = bytearray()
 
-        self._cmd = [
-            "ffmpeg",
-            "-hide_banner", "-loglevel", "warning",
-            # Input: ALSA
-            "-f", "alsa",
-            "-ac", "1",
-            # Let ALSA run its native rate; we will resample on output
-            "-i", alsa_device,
-            # Resample to SAMPLE_RATE first, then normalize to exact FRAME_SAMPLES blocks
-            "-af", f"aresample={self.sample_rate}:resampler=soxr,asetnsamples=n={self.samples_per_frame}:p=0",
-            # Output: raw PCM mono s16 at SAMPLE_RATE
-            "-acodec", "pcm_s16le",
-            "-ac", "1",
-            "-ar", str(self.sample_rate),
-            "-f", "s16le",
-            "-"
-        ]
+        # Audio queue for thread-safe communication
+        self._audio_queue = asyncio.Queue()
 
-        self._proc = subprocess.Popen(
-            self._cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0
-        )
+        # Get device info
+        try:
+            device_info = sd.query_devices(device_index)
+            native_rate = int(device_info['default_samplerate'])
+            print(f"[audio] Opening device {device_index}: {device_info['name']} @ {native_rate} Hz")
+        except Exception as e:
+            print(f"[audio] Failed to query device {device_index}: {e}")
+            self._closed = True
+            raise
+
+        # Start sounddevice input stream
+        try:
+            self.stream = sd.InputStream(
+                device=device_index,
+                channels=1,
+                samplerate=native_rate,
+                dtype='int16',
+                blocksize=int(native_rate * 0.02),  # ~20ms blocks
+                callback=self._audio_callback
+            )
+
+            # Resampler if native rate != target rate
+            self._resampler = None
+            if native_rate != self.sample_rate:
+                print(f"[audio] Will resample from {native_rate} Hz to {self.sample_rate} Hz")
+                self._resampler = av.AudioResampler(
+                    format='s16',
+                    layout='mono',
+                    rate=self.sample_rate
+                )
+                self._input_rate = native_rate
+            else:
+                self._input_rate = self.sample_rate
+
+            self.stream.start()
+            print(f"[audio] Stream started successfully")
+        except Exception as e:
+            print(f"[audio] Failed to start audio stream: {e}")
+            self._closed = True
+            raise
+
+    def _audio_callback(self, indata, frames, time_info, status):
+        """Called by sounddevice from audio thread"""
+        if status:
+            print(f"[audio] status: {status}")
+        if self._closed:
+            return
+
+        # indata is numpy array of int16, shape (frames, 1)
+        audio_bytes = indata.tobytes()
+
+        # Put in queue for async processing - use _aiortc_loop, not get_event_loop()
+        try:
+            _aiortc_loop.call_soon_threadsafe(
+                self._audio_queue.put_nowait, audio_bytes
+            )
+        except Exception as e:
+            print(f"[audio] queue error: {e}")
 
     async def recv(self) -> av.AudioFrame:
-        # Fill buffer to one frame (1920 bytes)
-        while len(self._buffer) < self._frame_bytes:
-            if self._closed:
-                return self._silence_frame()
-            need = self._frame_bytes - len(self._buffer)
-            chunk = await asyncio.get_event_loop().run_in_executor(None, self._read_exact, need)
-            if not chunk:
-                return self._silence_frame()
-            self._buffer.extend(chunk)
-
-        data = bytes(self._buffer[:self._frame_bytes])
-        del self._buffer[:self._frame_bytes]
-
-        frame = av.AudioFrame(format="s16", layout="mono", samples=self.samples_per_frame)
-        frame.planes[0].update(data)
-        frame.sample_rate = SAMPLE_RATE
-        frame.time_base = self._time_base
-        frame.pts = self._pts
-        self._pts += self.samples_per_frame
-        return frame
-
-    def _read_exact(self, n: int) -> bytes:
+        """Called by aiortc to get next audio frame"""
         try:
-            return self._proc.stdout.read(n)
-        except Exception:
-            return b""
+            # Get audio from queue
+            while len(self._buffer) < self._frame_bytes:
+                if self._closed:
+                    return self._silence_frame()
+
+                try:
+                    chunk = await asyncio.wait_for(self._audio_queue.get(), timeout=1.0)
+                except asyncio.TimeoutError:
+                    print("[audio] recv timeout, returning silence")
+                    return self._silence_frame()
+
+                # Resample if needed
+                if self._resampler:
+                    # Create PyAV frame from raw bytes
+                    input_samples = len(chunk) // 2  # int16 = 2 bytes per sample
+                    input_frame = av.AudioFrame(format='s16', layout='mono', samples=input_samples)
+                    input_frame.planes[0].update(chunk)
+                    input_frame.sample_rate = self._input_rate
+
+                    # Resample
+                    resampled_frames = self._resampler.resample(input_frame)
+                    for rf in resampled_frames:
+                        self._buffer.extend(bytes(rf.planes[0]))
+                else:
+                    self._buffer.extend(chunk)
+
+            # Extract one frame worth of data
+            data = bytes(self._buffer[:self._frame_bytes])
+            del self._buffer[:self._frame_bytes]
+
+            # Create output frame
+            frame = av.AudioFrame(format="s16", layout="mono", samples=self.samples_per_frame)
+            frame.planes[0].update(data)
+            frame.sample_rate = SAMPLE_RATE
+            frame.time_base = self._time_base
+            frame.pts = self._pts
+            self._pts += self.samples_per_frame
+            return frame
+
+        except Exception as e:
+            print(f"[audio] recv error: {e}")
+            return self._silence_frame()
 
     def _silence_frame(self) -> av.AudioFrame:
+        """Return a silent frame"""
         frame = av.AudioFrame(format="s16", layout="mono", samples=self.samples_per_frame)
         frame.planes[0].update(b"\x00" * self._frame_bytes)
         frame.sample_rate = SAMPLE_RATE
@@ -514,41 +687,28 @@ class FfmpegPcmTrack(MediaStreamTrack):
         self._pts += self.samples_per_frame
         return frame
 
-    # Synchronous stop, as aiortc calls stop() without awaiting
     def stop(self) -> None:
+        """Stop the audio stream"""
         if self._closed:
             return
         self._closed = True
+
         try:
-            if self._proc and self._proc.poll() is None:
-                try:
-                    self._proc.terminate()
-                except Exception:
-                    pass
-                try:
-                    self._proc.wait(timeout=1)
-                except Exception:
-                    pass
-            if self._proc:
-                try:
-                    if self._proc.stdout:
-                        self._proc.stdout.close()
-                except Exception:
-                    pass
-                try:
-                    if self._proc.stderr:
-                        self._proc.stderr.close()
-                except Exception:
-                    pass
-        finally:
-            try:
-                super().stop()
-            except Exception:
-                pass
+            if hasattr(self, 'stream') and self.stream:
+                self.stream.stop()
+                self.stream.close()
+                print("[audio] Stream stopped")
+        except Exception as e:
+            print(f"[audio] Error stopping stream: {e}")
+
+        try:
+            super().stop()
+        except Exception:
+            pass
 
 class Tone1kTrack(MediaStreamTrack):
     """
-    Generate a 1 kHz sine at 48 (or maybe 24) kHz mono, framed at exactly 20 ms (960 (or maybe 280) samples).
+    Generate a 1 kHz sine at SAMPLE_RATE mono, framed at exactly 20 ms (FRAME_SAMPLES samples).
     """
     kind = "audio"
 
@@ -558,7 +718,7 @@ class Tone1kTrack(MediaStreamTrack):
         self.samples_per_frame = FRAME_SAMPLES
         self.phase = 0.0
         self._closed = False
-        # add timestamp state to match FfmpegPcmTrack
+        # Timestamp state
         self._time_base = Fraction(1, self.sample_rate)
         self._pts = 0
 
@@ -571,7 +731,7 @@ class Tone1kTrack(MediaStreamTrack):
         two_pi_over_sr = 2.0 * math.pi / self.sample_rate
         for _ in range(self.samples_per_frame):
             sample = int(32767 * math.sin(self.phase))
-            buf += int(sample).to_bytes(2, byteorder="little", signed=True)
+            buf += sample.to_bytes(2, byteorder="little", signed=True)
             self.phase += two_pi_over_sr * freq
             if self.phase >= 2.0 * math.pi:
                 self.phase -= 2.0 * math.pi
@@ -593,149 +753,60 @@ class Tone1kTrack(MediaStreamTrack):
         self._pts += self.samples_per_frame
         return frame
 
-class ArecordPcmTrack(MediaStreamTrack):
-    """
-    Capture mono PCM from ALSA using arecord at SAMPLE_RATE Hz, s16le,
-    and emit exact 20 ms frames (FRAME_SAMPLES) with proper timestamps.
-    """
-    kind = "audio"
-
-    def __init__(self, alsa_device: str):
-        super().__init__()
-        self.sample_rate = SAMPLE_RATE
-        self.channels = 1
-        self.samples_per_frame = FRAME_SAMPLES
-        self._frame_bytes = self.samples_per_frame * self.channels * 2  # s16
-        self._closed = False
-        self._time_base = Fraction(1, self.sample_rate)
-        self._pts = 0
-        self._buffer = bytearray()
-
-        # arecord: force exact format/rate; buffer/period to avoid xruns
-        self._cmd = [
-            "arecord",
-            "-D", alsa_device,
-            "-f", "S16_LE",
-            "-c", "1",
-            "-r", str(self.sample_rate),
-            "-t", "raw",
-            "-q",
-            "-B", "200000",   # 200 ms buffer
-            "-F", "20000",    # 20 ms period
-            "-"
-        ]
-        self._proc = subprocess.Popen(
-            self._cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, bufsize=0
-        )
-
-    async def recv(self) -> av.AudioFrame:
-        while len(self._buffer) < self._frame_bytes:
-            if self._closed:
-                return self._silence_frame()
-            chunk = await asyncio.get_event_loop().run_in_executor(
-                None, self._read_exact, self._frame_bytes - len(self._buffer)
-            )
-            if not chunk:
-                return self._silence_frame()
-            self._buffer.extend(chunk)
-
-        data = bytes(self._buffer[:self._frame_bytes])
-        del self._buffer[:self._frame_bytes]
-
-        frame = av.AudioFrame(format="s16", layout="mono", samples=self.samples_per_frame)
-        frame.planes[0].update(data)
-        frame.sample_rate = self.sample_rate
-        frame.time_base = self._time_base
-        frame.pts = self._pts
-        self._pts += self.samples_per_frame
-        return frame
-
-    def _read_exact(self, n: int) -> bytes:
-        try:
-            return self._proc.stdout.read(n)
-        except Exception:
-            return b""
-
-    def _silence_frame(self) -> av.AudioFrame:
-        frame = av.AudioFrame(format="s16", layout="mono", samples=self.samples_per_frame)
-        frame.planes[0].update(b"\x00" * self._frame_bytes)
-        frame.sample_rate = self.sample_rate
-        frame.time_base = self._time_base
-        frame.pts = self._pts
-        self._pts += self.samples_per_frame
-        return frame
-
-    def stop(self) -> None:
-        if self._closed:
-            return
-        self._closed = True
-        try:
-            if self._proc and self._proc.poll() is None:
-                try:
-                    self._proc.terminate()
-                except Exception:
-                    pass
-                try:
-                    self._proc.wait(timeout=1)
-                except Exception:
-                    pass
-            if self._proc and self._proc.stdout:
-                try:
-                    self._proc.stdout.close()
-                except Exception:
-                    pass
-        finally:
-            try:
-                super().stop()
-            except Exception:
-                pass
-
 # Helpers for PeerConnection lifecycle and ICE
-def _alsa_output_device():
-    """Return ALSA output device string like 'plughw:X,Y' or None."""
-    return AUDIO_CONFIG.get("audio_out", {}).get("alsa_device")
+def _audio_output_device():
+    """Return audio output device string or None."""
+    return AUDIO_CONFIG.get("audio_out", {}).get("index")
 
-async def _pipe_inbound_to_alsa(track: MediaStreamTrack, alsa_device: str):
+async def _pipe_inbound_to_audio_device(track: MediaStreamTrack, device_index: int):
     """
-    Receive audio frames from inbound WebRTC track and write PCM to ALSA playback.
+    Receive audio frames from inbound WebRTC track and write PCM to audio device playback.
     """
-    # Launch aplay to play raw s16le mono at SAMPLE_RATE with stable buffering
-    cmd = [
-        "aplay",
-        "-D", alsa_device,
-        "-f", "S16_LE",
-        "-c", "1",
-        "-r", str(SAMPLE_RATE),
-        "-q",
-        "-B", "200000",  # 200 ms playback buffer
-        "-F", "20000",   # 20 ms period
-    ]
-    proc = None
+    import numpy as np
+    stream = None
     resampler = None
     outbuf = bytearray()
     frame_bytes = FRAME_SAMPLES * 2  # s16 mono bytes in 20 ms at SAMPLE_RATE
 
     try:
-        proc = subprocess.Popen(
-            cmd, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, bufsize=0
+        # Get device info
+        device_info = sd.query_devices(device_index)
+        native_rate = int(device_info['default_samplerate'])
+
+        # Start sounddevice output stream
+        stream = sd.OutputStream(
+            device=device_index,
+            channels=1,
+            samplerate=native_rate,
+            dtype='int16',
+            blocksize=int(native_rate * 0.02)  # ~20ms blocks
         )
-        resampler = AudioResampler(format="s16", layout="mono", rate=SAMPLE_RATE)
+        stream.start()
+
+        # Resampler to match device rate
+        resampler = AudioResampler(format="s16", layout="mono", rate=native_rate)
 
         while True:
             frame = await track.recv()  # av.AudioFrame
-            # Resample to our fixed rate/format/channel
+
+            # Resample to device's native rate
             for converted in resampler.resample(frame):
-                # Each converted is an av.AudioFrame of variable size; accumulate to 20 ms boundaries
-                data = converted.planes[0].to_bytes()  # s16 mono
+                # Convert av.AudioFrame to bytes
+                # Use .to_ndarray() instead of .to_bytes()
+                audio_array = converted.to_ndarray()  # Returns numpy array
+                data = audio_array.tobytes()  # Convert to bytes
                 outbuf += data
 
-                # Write in exact 20 ms chunks to avoid aplay underruns/clicks
-                while len(outbuf) >= frame_bytes:
-                    chunk = bytes(outbuf[:frame_bytes])
-                    del outbuf[:frame_bytes]
+                # Write in exact 20 ms chunks to avoid underruns/clicks
+                target_bytes = int(native_rate * 0.02) * 2  # s16 = 2 bytes per sample
+                while len(outbuf) >= target_bytes:
+                    chunk = bytes(outbuf[:target_bytes])
+                    del outbuf[:target_bytes]
                     try:
-                        if proc and proc.stdin:
-                            proc.stdin.write(chunk)
+                        if stream and stream.active:
+                            # Convert bytes to numpy array and write
+                            audio_array = np.frombuffer(chunk, dtype='int16').reshape(-1, 1)
+                            stream.write(audio_array)
                         else:
                             return
                     except Exception:
@@ -744,24 +815,17 @@ async def _pipe_inbound_to_alsa(track: MediaStreamTrack, alsa_device: str):
         print(f"[webrtc uplink] pipeline error: {e}")
     finally:
         try:
-            if proc and proc.stdin:
-                try:
-                    proc.stdin.close()
-                except Exception:
-                    pass
-            if proc and proc.poll() is None:
-                try:
-                    proc.terminate()
-                except Exception:
-                    pass
+            if stream and stream.active:
+                stream.stop()
+                stream.close()
         except Exception:
             pass
 
 async def _create_pc_with_rig_rx():
     """
-    Create a PeerConnection that sends rig RX audio (from ALSA or synthetic tone) to the client.
-    Only one active PC is allowed at a time to avoid ALSA 'busy' errors.
-    Also accepts inbound client mic audio and pipes it to ALSA playback.
+    Create a PeerConnection that sends rig RX audio (from audio device or synthetic tone) to the client.
+    Only one active PC is allowed at a time to avoid device 'busy' errors.
+    Also accepts inbound client mic audio and pipes it to audio playback.
     """
     await _close_all_pcs()
 
@@ -780,12 +844,12 @@ async def _create_pc_with_rig_rx():
     async def on_track(track):
         print(f"[webrtc uplink] inbound track kind={track.kind}")
         if track.kind == "audio":
-            out_dev = _alsa_output_device()
-            if out_dev:
+            out_idx = _audio_output_device()
+            if out_idx is not None:
                 # Run piping as a background task
-                asyncio.create_task(_pipe_inbound_to_alsa(track, out_dev))
+                asyncio.create_task(_pipe_inbound_to_audio_device(track, out_idx))
             else:
-                print("[webrtc uplink] No ALSA output configured; dropping inbound audio")
+                print("[webrtc uplink] No audio output configured; dropping inbound audio")
 
     if USE_TONE:
         print("[webrtc] using Tone1kTrack source")
@@ -793,22 +857,23 @@ async def _create_pc_with_rig_rx():
         pc.addTrack(track)
         return pc
 
-    alsa_in = _alsa_input_device()
-    if not alsa_in:
-        print("[webrtc] No ALSA input configured; cannot provide WebRTC audio.")
+    audio_in_idx = _audio_input_device()
+    if audio_in_idx is None:
+        print("[webrtc] No audio input configured; cannot provide WebRTC audio.")
     else:
-        print(f"[webrtc] creating ArecordPcmTrack on ALSA device: {alsa_in}")
+        device_name = AUDIO_CONFIG.get("audio_in", {}).get("name", "unknown")
+        print(f"[webrtc] creating SoundDevicePcmTrack on device: {device_name} (index {audio_in_idx})")
         try:
-            track = ArecordPcmTrack(alsa_in)
+            track = SoundDevicePcmTrack(audio_in_idx)
             pc.addTrack(track)
-            print("[webrtc] ArecordPcmTrack added")
+            print("[webrtc] SoundDevicePcmTrack added")
         except Exception as e:
-            print(f"[webrtc] failed to start ArecordPcmTrack: {e}")
+            print(f"[webrtc] failed to start SoundDevicePcmTrack: {e}")
     return pc
 
-def _alsa_input_device():
-    """Return ALSA input device string like 'plughw:X,Y' or None."""
-    return AUDIO_CONFIG.get("audio_in", {}).get("alsa_device")
+def _audio_input_device():
+    """Return audio input device or None."""
+    return AUDIO_CONFIG.get("audio_in", {}).get("index")
 
 async def _cleanup_pc(pc: RTCPeerConnection):
     try:
@@ -912,16 +977,16 @@ def handle_band_select(data):
     GEN goes to 830 kHz AM broadcast.
     """
     band = str(data.get('band', '')).strip()
-    if not band:
+    if not band or band == '--':
         emit('band_selected', {'success': False, 'error': 'Missing band'})
         return
 
     # Requested mappings
     centers = {
-        # "1.8":  {"freq": 1900000,  "mode": "LSB"},  # skipped per user
+        "1.8":   {"freq": 1900000,   "mode": "LSB"},
         "3.5":   {"freq": 3900000,   "mode": "LSB"},
         "7":     {"freq": 7237500,   "mode": "LSB"},
-        # "10":  {"freq": 10136000,  "mode": "USB"},  # skipped (no phone)
+        "10":    {"freq": 10136000,  "mode": "USB"},
         "14":    {"freq": 14300000,  "mode": "USB"},
         "18":    {"freq": 18139000,  "mode": "USB"},
         "21":    {"freq": 21362500,  "mode": "USB"},
@@ -1007,7 +1072,6 @@ def handle_set_mode(data):
     except Exception as e:
         emit('mode_set', {'success': False, 'error': str(e)})
 
-# --- Add: temporary debug to verify mode control path ---
 @socketio.on('debug_probe_modes')
 def handle_debug_probe_modes(_data=None):
     subset = ['LSB', 'USB', 'CW', 'AM', 'PKT-L', 'PKT-U']
@@ -1041,6 +1105,95 @@ def handle_debug_probe_modes(_data=None):
         emit('debug_probe_modes_result', {'success': True, 'results': results})
     except Exception as e:
         emit('debug_probe_modes_result', {'success': False, 'error': str(e)})
+
+
+# --- CW Keyer Control (WinKeyer) ---
+@socketio.on('send_cw')
+def handle_send_cw(data):
+    """
+    Send CW message via WinKeyer.
+    Data: { "message": "text to send", "wpm": optional speed }
+    """
+    if not WINKEYER_AVAILABLE:
+        emit('cw_sent', {'success': False, 'error': 'WinKeyer module not available'})
+        return
+
+    if not winkeyer_instance or not winkeyer_instance.connected:
+        emit('cw_sent', {'success': False, 'error': 'WinKeyer not connected'})
+        return
+
+    try:
+        message = data.get('message', '').strip()
+        wpm = data.get('wpm')  # optional
+
+        if not message:
+            emit('cw_sent', {'success': False, 'error': 'Empty message'})
+            return
+
+        success, estimated_time = winkeyer_instance.send_message(message, wpm=wpm)
+        emit('cw_sent', {
+            'success': True,
+            'message': message,
+            'estimated_time': estimated_time
+        })
+
+    except Exception as e:
+        emit('cw_sent', {'success': False, 'error': str(e)})
+
+
+@socketio.on('abort_cw')
+def handle_abort_cw(_data=None):
+    """Abort current CW transmission."""
+    if winkeyer_instance and winkeyer_instance.connected:
+        try:
+            winkeyer_instance.abort()
+            emit('cw_aborted', {'success': True})
+        except Exception as e:
+            emit('cw_aborted', {'success': False, 'error': str(e)})
+    else:
+        emit('cw_aborted', {'success': False, 'error': 'WinKeyer not connected'})
+
+
+@socketio.on('set_cw_speed')
+def handle_set_cw_speed(data):
+    """Change WinKeyer default speed."""
+    if not WINKEYER_AVAILABLE:
+        emit('cw_speed_set', {'success': False, 'error': 'WinKeyer not available'})
+        return
+
+    if not winkeyer_instance or not winkeyer_instance.connected:
+        emit('cw_speed_set', {'success': False, 'error': 'WinKeyer not connected'})
+        return
+
+    try:
+        wpm = int(data.get('wpm', 18))
+        winkeyer_instance.default_wpm = wpm
+        winkeyer_instance.set_speed(wpm)
+        emit('cw_speed_set', {'success': True, 'wpm': wpm})
+        print(f"CW speed changed to {wpm} WPM")
+    except Exception as e:
+        emit('cw_speed_set', {'success': False, 'error': str(e)})
+
+
+@app.route('/api/winkeyer/status')
+def api_winkeyer_status():
+    """API endpoint to check WinKeyer status."""
+    if not WINKEYER_AVAILABLE:
+        return jsonify({'available': False, 'reason': 'Module not loaded'})
+
+    if winkeyer_instance and winkeyer_instance.connected:
+        return jsonify({
+            'available': True,
+            'connected': True,
+            'port': winkeyer_instance.port,
+            'firmware': f"0x{winkeyer_instance.firmware_version:02x}" if winkeyer_instance.firmware_version else "unknown"
+        })
+    else:
+        return jsonify({
+            'available': True,
+            'connected': False,
+            'reason': 'Not configured or connection failed'
+        })
 
 # ------------- Audio: WebRTC (Opus) -------------
 @app.post('/api/webrtc/offer')
@@ -1097,7 +1250,7 @@ async def _handle_webrtc_offer(offer: RTCSessionDescription):
 def api_webrtc_teardown():
     """
     Explicit teardown endpoint invoked by the client on 'Disconnect'.
-    Ensures ALSA is released immediately.
+    Ensures audio devices are released immediately.
     """
     try:
         fut = asyncio.run_coroutine_threadsafe(_close_all_pcs(), _aiortc_loop)
