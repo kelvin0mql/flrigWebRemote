@@ -29,7 +29,7 @@ except ImportError:
 # Configuration
 FLRIG_HOST = "192.168.1.29"
 FLRIG_PORT = 12345
-BEACON_MESSAGE = "CQ TEST N0MQL N0MQL"
+BEACON_MESSAGE = "BCN N0MQL N0MQL"
 CW_SPEED_WPM = 20
 INTER_BAND_DELAY = 60  # seconds between bands
 
