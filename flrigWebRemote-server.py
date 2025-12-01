@@ -123,7 +123,6 @@ def load_config():
             print(f"Warning: failed to read config: {e}")
     return {}
 
-
 def save_config(cfg: dict):
     try:
         with open(CONFIG_PATH, "w") as f:
@@ -131,6 +130,52 @@ def save_config(cfg: dict):
         print(f"Saved configuration to {CONFIG_PATH}")
     except Exception as e:
         print(f"Error saving config: {e}")
+
+def get_linux_alsa_description(card_idx):
+    """
+    On Linux, read /proc/asound/cards to find the friendly description
+    for a specific ALSA card index.
+    """
+    try:
+        if not os.path.exists('/proc/asound/cards'):
+            return None
+
+        with open('/proc/asound/cards', 'r') as f:
+            lines = f.readlines()
+
+        # Look for the card entry. Format is roughly:
+        #  0 [PCH            ]: HDA-Intel - HDA Intel PCH
+        #                       HDA Intel PCH at 0x...
+        #  1 [CODEC          ]: USB-Audio - USB AUDIO  CODEC
+        #                       Burr-Brown from TI USB AUDIO  CODEC at usb-...
+
+        target_start = f" {card_idx} ["
+        for i, line in enumerate(lines):
+            if line.startswith(target_start):
+                # The specific description is usually on the NEXT line, indented
+                if i + 1 < len(lines):
+                    desc = lines[i+1].strip()
+                    return desc
+    except Exception:
+        pass
+    return None
+
+def enhance_device_name(name):
+    """
+    If on Linux and name contains (hw:X,Y), try to append the ALSA description.
+    """
+    if not sys.platform.startswith('linux'):
+        return name
+
+    # Regex to find (hw:N,...)
+    match = re.search(r'\(hw:(\d+),', name)
+    if match:
+        card_idx = match.group(1)
+        desc = get_linux_alsa_description(card_idx)
+        if desc:
+            # Append the friendly description
+            return f"{name}  {{ {desc} }}"
+    return name
 
 def enumerate_input_devices():
     """
@@ -142,9 +187,12 @@ def enumerate_input_devices():
         device_list = sd.query_devices()
         for i, info in enumerate(device_list):
             if info['max_input_channels'] > 0:
+                # Enhance name with Linux ALSA details if available
+                display_name = enhance_device_name(info['name'])
+
                 devices.append({
                     "index": i,
-                    "name": info['name'],
+                    "name": display_name,
                     "channels": info['max_input_channels'],
                     "sample_rate": int(info['default_samplerate']),
                     "host_api": sd.query_hostapis(info['hostapi'])['name']
@@ -168,9 +216,12 @@ def enumerate_playback_devices():
         device_list = sd.query_devices()
         for i, info in enumerate(device_list):
             if info['max_output_channels'] > 0:
+                # Enhance name with Linux ALSA details if available
+                display_name = enhance_device_name(info['name'])
+
                 devices.append({
                     "index": i,
-                    "name": info['name'],
+                    "name": display_name,
                     "channels": info['max_output_channels'],
                     "sample_rate": int(info['default_samplerate']),
                     "host_api": sd.query_hostapis(info['hostapi'])['name']
