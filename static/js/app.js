@@ -666,22 +666,54 @@ window.micEnabled = false;
 let micStream = null;
 
 function updateMicButtons() {
-  const enableBtn = document.getElementById('enable-mic');
-  const disableBtn = document.getElementById('disable-mic');
-  if (!enableBtn || !disableBtn) return;
+    const enableBtn = document.getElementById('enable-mic');
+    const disableBtn = document.getElementById('disable-mic');
+    if (!enableBtn || !disableBtn) return;
 
-  if (window.micEnabled) {
-    enableBtn.disabled = true;
-    enableBtn.className = 'btn btn-secondary';
-    disableBtn.disabled = false;
-    disableBtn.className = 'btn btn-danger';
-  } else {
-    enableBtn.disabled = false;
-    enableBtn.className = 'btn btn-outline-secondary';
-    disableBtn.disabled = true;
-    disableBtn.className = 'btn btn-outline-secondary';
-  }
+    if (window.micEnabled) {
+        enableBtn.disabled = true;
+        enableBtn.className = 'btn btn-secondary';
+        disableBtn.disabled = false;
+        disableBtn.className = 'btn btn-danger';
+    } else {
+        enableBtn.disabled = false;
+        enableBtn.className = 'btn btn-outline-secondary';
+        disableBtn.disabled = true;
+        disableBtn.className = 'btn btn-outline-secondary';
+    }
 }
+
+// --- Crossband Relay Logic ---
+let crossbandActive = false;
+const crossbandBtn = document.getElementById('crossband-btn');
+
+function updateCrossbandButton() {
+    if (!crossbandBtn) return;
+    if (crossbandActive) {
+        crossbandBtn.textContent = 'Stop XBand';
+        crossbandBtn.className = 'btn btn-warning w-100';
+    } else {
+        crossbandBtn.textContent = 'Start XBand';
+        crossbandBtn.className = 'btn btn-outline-dark w-100';
+    }
+}
+
+if (crossbandBtn) {
+    crossbandBtn.addEventListener('click', () => {
+        const action = crossbandActive ? 'stop' : 'start';
+        socket.emit('ht_relay_control', { action });
+    });
+}
+
+socket.on('ht_relay_status', (data) => {
+    if (data.error) {
+        alert('Relay Error: ' + data.error);
+        return;
+    }
+    crossbandActive = data.active;
+    updateCrossbandButton();
+    console.log('[relay] status:', data.active ? 'ACTIVE' : 'STOPPED', data.msg || '');
+});
 
 async function connectMic() {
   if (window.micEnabled) return;

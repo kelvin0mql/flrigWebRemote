@@ -822,60 +822,35 @@ class AudioRelay:
         print("[relay] Stopped audio relay")
 
     def _run_loop(self):
-        import numpy as np
-
         try:
             # Query device capabilities
             in_info = sd.query_devices(self.input_device_idx)
             out_info = sd.query_devices(self.output_device_idx)
 
-            in_rate = int(in_info['default_samplerate'])
-            out_rate = int(out_info['default_samplerate'])
+            print(f"[relay] Bridge active: {in_info['name']} -> {out_info['name']}")
 
-            # Determine block size
-            block_size = int(in_rate * self.buffer_duration)
+            # Use a standard rate (48k) and let PortAudio/sounddevice handle resampling if devices differ.
+            # Using a callback is the most robust way to bridge inputs to outputs.
+            common_rate = 48000
+            block_size = int(common_rate * self.buffer_duration)
 
-            # Setup Resampler if rates differ
-            resampler = None
-            if in_rate != out_rate:
-                print(f"[relay] Resampling required: {in_rate} -> {out_rate}")
-                resampler = AudioResampler(format='s16', layout='mono', rate=out_rate)
+            def callback(indata, outdata, frames, time_info, status):
+                if status:
+                    print(f"[relay] status: {status}")
+                # Copy input directly to output
+                outdata[:] = indata
 
-            with sd.InputStream(device=self.input_device_idx, channels=1, samplerate=in_rate,
-                                dtype='int16', blocksize=block_size) as stream_in, \
-                 sd.OutputStream(device=self.output_device_idx, channels=1, samplerate=out_rate,
-                                 dtype='int16', blocksize=int(out_rate * self.buffer_duration)) as stream_out:
+            # Open duplex stream
+            with sd.Stream(device=(self.input_device_idx, self.output_device_idx),
+                           channels=1,
+                           samplerate=common_rate,
+                           dtype='int16',
+                           blocksize=block_size,
+                           callback=callback):
 
-                print(f"[relay] Bridge active: {in_info['name']} -> {out_info['name']}")
-
+                # Keep thread alive while running
                 while self.running:
-                    # Blocking read
-                    data_in, overflow = stream_in.read(block_size)
-                    if overflow:
-                        print("[relay] Input overflow")
-
-                    # Process/Resample
-                    data_out = data_in
-                    if resampler:
-                        # Convert numpy int16 -> bytes -> av.AudioFrame -> resample -> bytes -> numpy int16
-                        # This is a bit heavy but reuses the AV logic we already have.
-                        # For a simple raw resampling, separate libraries are faster, but we stick to what we have.
-
-                        # Actually, for raw PCM relay, we might not want the overhead of PyAV wrapping every chunk
-                        # if we can avoid it. But since we imported AudioResampler, let's use it safely.
-                        # Construct AV Frame
-                        frame = av.AudioFrame(format='s16', layout='mono', samples=len(data_in))
-                        frame.planes[0].update(data_in.tobytes())
-                        frame.sample_rate = in_rate
-
-                        resampled_frames = resampler.resample(frame)
-                        out_bytes = b''.join(bytes(f.planes[0]) for f in resampled_frames)
-
-                        # Convert back to numpy for sounddevice
-                        data_out = np.frombuffer(out_bytes, dtype='int16').reshape(-1, 1)
-
-                    # Blocking write
-                    stream_out.write(data_out)
+                    time.sleep(0.1)
 
         except Exception as e:
             print(f"[relay] Bridge error: {e}")
