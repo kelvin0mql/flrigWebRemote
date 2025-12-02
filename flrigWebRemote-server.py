@@ -13,6 +13,7 @@ import asyncio
 import logging
 from fractions import Fraction
 import sounddevice as sd
+import numpy as np
 import av
 from av.audio.resampler import AudioResampler
 import math
@@ -797,6 +798,7 @@ class AudioRelay:
     """
     Pipes audio from a Source Device (e.g., VHF RX) to a Sink Device (e.g., HF TX input).
     Runs in a dedicated thread. Handles resampling if rates differ.
+    Includes Software VOX to trigger HF PTT.
     """
     def __init__(self, input_device_idx, output_device_idx, buffer_duration=0.04):
         self.input_device_idx = input_device_idx
@@ -804,6 +806,12 @@ class AudioRelay:
         self.buffer_duration = buffer_duration
         self.running = False
         self.thread = None
+
+        # VOX Configuration
+        self.vox_threshold = 333      # Amplitude threshold (int16: 0-32767)
+        self.vox_hang_time = 0.5       # Seconds to hold PTT after audio drops
+        self.last_loud_time = 0
+        self.is_transmitting = False
 
     def start(self):
         if self.running:
@@ -819,6 +827,13 @@ class AudioRelay:
         self.running = False
         if self.thread:
             self.thread.join(timeout=2.0)
+
+        # Ensure PTT is released when relay stops
+        if self.is_transmitting:
+            print("[relay] Relay stopping, releasing PTT")
+            flrig_remote.ptt_control('off')
+            self.is_transmitting = False
+
         print("[relay] Stopped audio relay")
 
     def _run_loop(self):
@@ -829,15 +844,21 @@ class AudioRelay:
 
             print(f"[relay] Bridge active: {in_info['name']} -> {out_info['name']}")
 
-            # Use a standard rate (48k) and let PortAudio/sounddevice handle resampling if devices differ.
-            # Using a callback is the most robust way to bridge inputs to outputs.
             common_rate = 48000
             block_size = int(common_rate * self.buffer_duration)
 
             def callback(indata, outdata, frames, time_info, status):
                 if status:
                     print(f"[relay] status: {status}")
-                # Copy input directly to output
+
+                # --- VOX Logic ---
+                # indata is a numpy array (int16)
+                # Check peak amplitude
+                peak = np.max(np.abs(indata))
+                if peak > self.vox_threshold:
+                    self.last_loud_time = time.time()
+
+                # Copy input to output
                 outdata[:] = indata
 
             # Open duplex stream
@@ -848,9 +869,26 @@ class AudioRelay:
                            blocksize=block_size,
                            callback=callback):
 
-                # Keep thread alive while running
+                # Control Loop
                 while self.running:
-                    time.sleep(0.1)
+                    # Check VOX timer
+                    now = time.time()
+                    time_since_loud = now - self.last_loud_time
+
+                    if time_since_loud < self.vox_hang_time:
+                        # Audio is loud (or was recently) -> Transmit
+                        if not self.is_transmitting:
+                            print(f"[relay] VOX Triggered (Peak detection). PTT ON.")
+                            flrig_remote.ptt_control('on')
+                            self.is_transmitting = True
+                    else:
+                        # Audio is quiet -> Receive
+                        if self.is_transmitting:
+                            print(f"[relay] VOX Hangtime expired. PTT OFF.")
+                            flrig_remote.ptt_control('off')
+                            self.is_transmitting = False
+
+                    time.sleep(0.05)
 
         except Exception as e:
             print(f"[relay] Bridge error: {e}")
@@ -913,7 +951,6 @@ async def _pipe_inbound_to_audio_device(track: MediaStreamTrack, device_index: i
     """
     Receive audio frames from inbound WebRTC track and write PCM to audio device playback.
     """
-    import numpy as np
     stream = None
     resampler = None
     outbuf = bytearray()
