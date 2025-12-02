@@ -611,6 +611,9 @@ class FlrigWebRemote:
 # Global instance
 flrig_remote = FlrigWebRemote()
 
+# Audio Relay Instance
+ht_relay = None
+
 # --- Initialize WinKeyer if configured ---
 winkeyer_instance = None
 if WINKEYER_AVAILABLE and "winkeyer" in AUDIO_CONFIG:
@@ -789,6 +792,95 @@ class SoundDevicePcmTrack(MediaStreamTrack):
             super().stop()
         except Exception:
             pass
+
+class AudioRelay:
+    """
+    Pipes audio from a Source Device (e.g., VHF RX) to a Sink Device (e.g., HF TX input).
+    Runs in a dedicated thread. Handles resampling if rates differ.
+    """
+    def __init__(self, input_device_idx, output_device_idx, buffer_duration=0.04):
+        self.input_device_idx = input_device_idx
+        self.output_device_idx = output_device_idx
+        self.buffer_duration = buffer_duration
+        self.running = False
+        self.thread = None
+
+    def start(self):
+        if self.running:
+            return
+        self.running = True
+        self.thread = threading.Thread(target=self._run_loop, daemon=True)
+        self.thread.start()
+        print(f"[relay] Started audio relay: Dev {self.input_device_idx} -> Dev {self.output_device_idx}")
+
+    def stop(self):
+        if not self.running:
+            return
+        self.running = False
+        if self.thread:
+            self.thread.join(timeout=2.0)
+        print("[relay] Stopped audio relay")
+
+    def _run_loop(self):
+        import numpy as np
+
+        try:
+            # Query device capabilities
+            in_info = sd.query_devices(self.input_device_idx)
+            out_info = sd.query_devices(self.output_device_idx)
+
+            in_rate = int(in_info['default_samplerate'])
+            out_rate = int(out_info['default_samplerate'])
+
+            # Determine block size
+            block_size = int(in_rate * self.buffer_duration)
+
+            # Setup Resampler if rates differ
+            resampler = None
+            if in_rate != out_rate:
+                print(f"[relay] Resampling required: {in_rate} -> {out_rate}")
+                resampler = AudioResampler(format='s16', layout='mono', rate=out_rate)
+
+            with sd.InputStream(device=self.input_device_idx, channels=1, samplerate=in_rate,
+                                dtype='int16', blocksize=block_size) as stream_in, \
+                 sd.OutputStream(device=self.output_device_idx, channels=1, samplerate=out_rate,
+                                 dtype='int16', blocksize=int(out_rate * self.buffer_duration)) as stream_out:
+
+                print(f"[relay] Bridge active: {in_info['name']} -> {out_info['name']}")
+
+                while self.running:
+                    # Blocking read
+                    data_in, overflow = stream_in.read(block_size)
+                    if overflow:
+                        print("[relay] Input overflow")
+
+                    # Process/Resample
+                    data_out = data_in
+                    if resampler:
+                        # Convert numpy int16 -> bytes -> av.AudioFrame -> resample -> bytes -> numpy int16
+                        # This is a bit heavy but reuses the AV logic we already have.
+                        # For a simple raw resampling, separate libraries are faster, but we stick to what we have.
+
+                        # Actually, for raw PCM relay, we might not want the overhead of PyAV wrapping every chunk
+                        # if we can avoid it. But since we imported AudioResampler, let's use it safely.
+                        # Construct AV Frame
+                        frame = av.AudioFrame(format='s16', layout='mono', samples=len(data_in))
+                        frame.planes[0].update(data_in.tobytes())
+                        frame.sample_rate = in_rate
+
+                        resampled_frames = resampler.resample(frame)
+                        out_bytes = b''.join(bytes(f.planes[0]) for f in resampled_frames)
+
+                        # Convert back to numpy for sounddevice
+                        data_out = np.frombuffer(out_bytes, dtype='int16').reshape(-1, 1)
+
+                    # Blocking write
+                    stream_out.write(data_out)
+
+        except Exception as e:
+            print(f"[relay] Bridge error: {e}")
+        finally:
+            self.running = False
 
 class Tone1kTrack(MediaStreamTrack):
     """
@@ -1155,6 +1247,34 @@ def handle_set_mode(data):
         emit('mode_set', {'success': True, 'mode': mode})
     except Exception as e:
         emit('mode_set', {'success': False, 'error': str(e)})
+
+@socketio.on('ht_relay_control')
+def handle_ht_relay_control(data):
+    """Enable or disable the VHF->HF Audio Relay"""
+    global ht_relay
+    action = data.get('action')
+
+    vhf_in = AUDIO_CONFIG.get("audio_in_vhf", {}).get("index")
+    hf_out = AUDIO_CONFIG.get("audio_out", {}).get("index")
+
+    if action == 'start':
+        if vhf_in is None or hf_out is None:
+            emit('ht_relay_status', {'active': False, 'error': 'VHF Input or HF Output not configured'})
+            return
+
+        if ht_relay and ht_relay.running:
+            emit('ht_relay_status', {'active': True, 'msg': 'Already running'})
+            return
+
+        ht_relay = AudioRelay(vhf_in, hf_out)
+        ht_relay.start()
+        emit('ht_relay_status', {'active': True})
+
+    elif action == 'stop':
+        if ht_relay:
+            ht_relay.stop()
+            ht_relay = None
+        emit('ht_relay_status', {'active': False})
 
 @socketio.on('debug_probe_modes')
 def handle_debug_probe_modes(_data=None):
