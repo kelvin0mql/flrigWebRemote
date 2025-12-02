@@ -90,7 +90,7 @@ function isListening() {
 function updateListenButtons() {
   if (!connectAudioBtn || !disconnectAudioBtn) return;
   if (webrtcConnected) {
-    connectAudioBtn.textContent = 'Connected (Opus)';
+    connectAudioBtn.textContent = 'Connected';
     connectAudioBtn.className = 'btn btn-secondary';
     disconnectAudioBtn.textContent = 'Disconnect';
     disconnectAudioBtn.className = 'btn btn-outline-danger';

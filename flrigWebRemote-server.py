@@ -317,48 +317,83 @@ def validate_stored_winkeyer(cfg_wk):
 
 def ensure_audio_config(force_reconfigure: bool = False, configure_winkeyer: bool = False):
     """
-    Ensure we have capture (audio_in), playback (audio_out), and optionally WinKeyer configured.
+    Ensure we have capture (audio_in_hf, audio_in_vhf), playback (audio_out), and optionally WinKeyer configured.
     Config shape:
       {
-        "audio_in":  { "name": "...", "index": N },
-        "audio_out": { "name": "...", "index": N },
-        "winkeyer":  { "port": "/dev/...", "description": "..." }
+        "audio_in_hf":  { "name": "...", "index": N },
+        "audio_in_vhf": { "name": "...", "index": N },
+        "audio_out":    { "name": "...", "index": N },
+        "winkeyer":     { "port": "/dev/...", "description": "..." }
       }
     """
     cfg = load_config()
     changed = False
 
-    # ---------- Ensure CAPTURE device (audio_in) ----------
-    need_in = (
+    # Pre-fetch lists to avoid querying multiple times
+    in_list = enumerate_input_devices()
+    out_list = enumerate_playback_devices()
+
+    # ---------- Ensure HF CAPTURE device (audio_in_hf) ----------
+    need_hf = (
             force_reconfigure or
-            ("audio_in" not in cfg) or
-            ("index" not in cfg.get("audio_in", {})) or
-            (not validate_stored_capture(cfg.get("audio_in")))
+            ("audio_in_hf" not in cfg) or
+            ("index" not in cfg.get("audio_in_hf", {})) or
+            (not validate_stored_capture(cfg.get("audio_in_hf")))
     )
 
-    if need_in:
-        in_list = enumerate_input_devices()
+    if need_hf:
         if not in_list:
-            print("No input-capable audio devices found. Proceeding without audio_in configuration.")
+            print("No input-capable audio devices found. Proceeding without HF input configuration.")
         else:
-            picked_in = None
-            # Prompt if force_reconfigure OR if no valid config exists
-            # Remove the isatty() check - always prompt when explicitly requested
+            print("\n--- HF Radio Input Configuration ---")
+            picked_hf = None
             if force_reconfigure:
-                picked_in = prompt_select_device(in_list, title="input")
+                picked_hf = prompt_select_device(in_list, title="HF Radio Input")
             else:
-                picked_in = auto_pick_device(in_list)
-                if picked_in:
-                    print(f"Auto-selected input: {picked_in['name']} (index {picked_in['index']})")
-            if picked_in:
-                cfg["audio_in"] = {
-                    "name": picked_in["name"],
-                    "index": picked_in["index"]
+                picked_hf = auto_pick_device(in_list)
+                if picked_hf:
+                    print(f"Auto-selected HF input: {picked_hf['name']} (index {picked_hf['index']})")
+
+            if picked_hf:
+                cfg["audio_in_hf"] = {
+                    "name": picked_hf["name"],
+                    "index": picked_hf["index"]
                 }
                 changed = True
-                print(f"Selected input: {picked_in['name']} (index {picked_in['index']})")
+                print(f"Selected HF input: {picked_hf['name']} (index {picked_hf['index']})")
     else:
-        print(f"Using configured input: {cfg['audio_in']['name']} (index {cfg['audio_in']['index']})")
+        print(f"Using configured HF input: {cfg['audio_in_hf']['name']} (index {cfg['audio_in_hf']['index']})")
+
+    # ---------- Ensure VHF/UHF CAPTURE device (audio_in_vhf) ----------
+    need_vhf = (
+            force_reconfigure or
+            ("audio_in_vhf" not in cfg) or
+            ("index" not in cfg.get("audio_in_vhf", {})) or
+            (not validate_stored_capture(cfg.get("audio_in_vhf")))
+    )
+
+    if need_vhf:
+        if not in_list:
+            print("No input-capable audio devices found. Proceeding without VHF/UHF input configuration.")
+        else:
+            print("\n--- VHF/UHF Radio Input Configuration ---")
+            picked_vhf = None
+            if force_reconfigure:
+                picked_vhf = prompt_select_device(in_list, title="VHF/UHF Radio Input")
+            else:
+                picked_vhf = auto_pick_device(in_list)
+                if picked_vhf:
+                    print(f"Auto-selected VHF input: {picked_vhf['name']} (index {picked_vhf['index']})")
+
+            if picked_vhf:
+                cfg["audio_in_vhf"] = {
+                    "name": picked_vhf["name"],
+                    "index": picked_vhf["index"]
+                }
+                changed = True
+                print(f"Selected VHF input: {picked_vhf['name']} (index {picked_vhf['index']})")
+    else:
+        print(f"Using configured VHF input: {cfg['audio_in_vhf']['name']} (index {cfg['audio_in_vhf']['index']})")
 
     # ---------- Ensure PLAYBACK device (audio_out) ----------
     need_out = (
@@ -369,15 +404,13 @@ def ensure_audio_config(force_reconfigure: bool = False, configure_winkeyer: boo
     )
 
     if need_out:
-        out_list = enumerate_playback_devices()
         if not out_list:
             print("No output-capable audio devices found. Proceeding without audio_out configuration.")
         else:
+            print("\n--- Audio Output Configuration ---")
             picked_out = None
-            # Prompt if force_reconfigure OR if no valid config exists
-            # Remove the isatty() check - always prompt when explicitly requested
             if force_reconfigure:
-                picked_out = prompt_select_device(out_list, title="output")
+                picked_out = prompt_select_device(out_list, title="Audio Output")
             else:
                 picked_out = auto_pick_device(out_list)
                 if picked_out:
@@ -910,9 +943,9 @@ async def _create_pc_with_rig_rx():
 
     audio_in_idx = _audio_input_device()
     if audio_in_idx is None:
-        print("[webrtc] No audio input configured; cannot provide WebRTC audio.")
+        print("[webrtc] No HF audio input configured; cannot provide WebRTC audio.")
     else:
-        device_name = AUDIO_CONFIG.get("audio_in", {}).get("name", "unknown")
+        device_name = AUDIO_CONFIG.get("audio_in_hf", {}).get("name", "unknown")
         print(f"[webrtc] creating SoundDevicePcmTrack on device: {device_name} (index {audio_in_idx})")
         try:
             track = SoundDevicePcmTrack(audio_in_idx)
@@ -923,8 +956,8 @@ async def _create_pc_with_rig_rx():
     return pc
 
 def _audio_input_device():
-    """Return audio input device or None."""
-    return AUDIO_CONFIG.get("audio_in", {}).get("index")
+    """Return audio input device or None (default to HF)."""
+    return AUDIO_CONFIG.get("audio_in_hf", {}).get("index")
 
 async def _cleanup_pc(pc: RTCPeerConnection):
     try:
