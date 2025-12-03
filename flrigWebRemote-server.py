@@ -74,7 +74,7 @@ Examples:
     USE_TONE=1 python3 flrigWebRemote-server.py
 
 Requirements:
-    - flrig running and accessible at http://192.168.1.49:12345
+    - flrig running and accessible at http://127.0.0.1:12345
     - Python packages: flask, flask-socketio, sounddevice, av, aiortc
     - For WinKeyer support: pyserial package and winkeyer.py module
 
