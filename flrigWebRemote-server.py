@@ -12,8 +12,8 @@ import re
 import asyncio
 import logging
 from fractions import Fraction
-import sounddevice as sd
 import numpy as np
+import sounddevice as sd
 import av
 from av.audio.resampler import AudioResampler
 import math
@@ -74,7 +74,7 @@ Examples:
     USE_TONE=1 python3 flrigWebRemote-server.py
 
 Requirements:
-    - flrig running and accessible at http://127.0.0.1:12345
+    - flrig running and accessible at http://192.168.1.29:12345
     - Python packages: flask, flask-socketio, sounddevice, av, aiortc
     - For WinKeyer support: pyserial package and winkeyer.py module
 
@@ -106,7 +106,7 @@ app.config['SECRET_KEY'] = 'flrig-web-remote-secret'
 socketio = SocketIO(app, cors_allowed_origins="*", logger=DEBUG_MODE, engineio_logger=DEBUG_MODE)
 
 # flrig connection settings
-FLRIG_HOST = "192.168.1.49"
+FLRIG_HOST = "127.0.0.1"
 FLRIG_PORT = 12345
 server_url = f"http://{FLRIG_HOST}:{FLRIG_PORT}/RPC2"
 
@@ -124,6 +124,7 @@ def load_config():
             print(f"Warning: failed to read config: {e}")
     return {}
 
+
 def save_config(cfg: dict):
     try:
         with open(CONFIG_PATH, "w") as f:
@@ -132,111 +133,239 @@ def save_config(cfg: dict):
     except Exception as e:
         print(f"Error saving config: {e}")
 
-def get_linux_alsa_description(card_idx):
+def get_linux_alsa_cards():
     """
-    On Linux, read /proc/asound/cards to find the friendly description
-    for a specific ALSA card index.
+    On Linux, parse /proc/asound/cards to map card indices to friendly names.
+    Returns: { card_index: "Friendly Name" }
     """
+    cards = {}
+    if not sys.platform.startswith('linux'):
+        return cards
     try:
         if not os.path.exists('/proc/asound/cards'):
-            return None
+            return cards
 
         with open('/proc/asound/cards', 'r') as f:
             lines = f.readlines()
 
-        # Look for the card entry. Format is roughly:
-        #  0 [PCH            ]: HDA-Intel - HDA Intel PCH
-        #                       HDA Intel PCH at 0x...
+        # Iterate through lines to find card indices and their detailed descriptions
+        # Example format:
         #  1 [CODEC          ]: USB-Audio - USB AUDIO  CODEC
-        #                       Burr-Brown from TI USB AUDIO  CODEC at usb-...
-
-        target_start = f" {card_idx} ["
+        #                       BurrBrown from Texas Instruments USB AUDIO  CODEC at usb-0000:00:14.0-11, full 
         for i, line in enumerate(lines):
-            if line.startswith(target_start):
-                # The specific description is usually on the NEXT line, indented
+            match = re.match(r'^\s*(\d+)\s+\[', line)
+            if match:
+                card_idx = int(match.group(1))
+                # The most descriptive name is usually on the NEXT line
                 if i + 1 < len(lines):
                     desc = lines[i+1].strip()
-                    return desc
-    except Exception:
-        pass
-    return None
+                    
+                    # 1. Clean up "at usb-..." suffix first to get a clean base name
+                    desc = re.sub(r'\s+at\s+usb-.*$', '', desc)
+                    # Also clean up "full speed" or similar suffixes
+                    desc = re.sub(r',\s+(full|high)\s+speed$', '', desc)
+                    desc = re.sub(r',\s+full$', '', desc)
 
-def enhance_device_name(name):
-    """
-    If on Linux and name contains (hw:X,Y), try to append the ALSA description.
-    """
-    if not sys.platform.startswith('linux'):
-        return name
+                    # 2. Try to get even more info from sysfs if possible
+                    try:
+                        base_path = f"/sys/class/sound/card{card_idx}/device"
+                        product_name = ""
+                        manufacturer = ""
+                        usb_id = ""
 
-    # Regex to find (hw:N,...)
-    match = re.search(r'\(hw:(\d+),', name)
-    if match:
-        card_idx = match.group(1)
-        desc = get_linux_alsa_description(card_idx)
-        if desc:
-            # Append the friendly description
-            return f"{name}  {{ {desc} }}"
-    return name
+                        if os.path.exists(f"{base_path}/product"):
+                            with open(f"{base_path}/product", 'r') as pf:
+                                product_name = pf.read().strip()
+                        elif os.path.exists(f"{base_path}/../product"):
+                            with open(f"{base_path}/../product", 'r') as pf:
+                                product_name = pf.read().strip()
+                        
+                        if os.path.exists(f"{base_path}/manufacturer"):
+                            with open(f"{base_path}/manufacturer", 'r') as mf:
+                                manufacturer = mf.read().strip()
+                        elif os.path.exists(f"{base_path}/../manufacturer"):
+                            with open(f"{base_path}/../manufacturer", 'r') as mf:
+                                manufacturer = mf.read().strip()
+                        
+                        # Try to get USB ID from /proc/asound first as it's most direct for ALSA
+                        proc_usb_id = f"/proc/asound/card{card_idx}/usbid"
+                        if os.path.exists(proc_usb_id):
+                            with open(proc_usb_id, 'r') as uf:
+                                usb_id = uf.read().strip()
+                        
+                        if not usb_id:
+                            if os.path.exists(f"{base_path}/idVendor") and os.path.exists(f"{base_path}/idProduct"):
+                                with open(f"{base_path}/idVendor", 'r') as vf, open(f"{base_path}/idProduct", 'r') as pdf:
+                                    usb_id = f"{vf.read().strip()}:{pdf.read().strip()}"
+                            elif os.path.exists(f"{base_path}/../idVendor") and os.path.exists(f"{base_path}/../idProduct"):
+                                with open(f"{base_path}/../idVendor", 'r') as vf, open(f"{base_path}/../idProduct", 'r') as pdf:
+                                    usb_id = f"{vf.read().strip()}:{pdf.read().strip()}"
+
+                        # Construct a better name if we got something new
+                        extra = []
+                        if manufacturer and manufacturer.lower() not in desc.lower():
+                            extra.append(manufacturer)
+                        if product_name and product_name.lower() not in desc.lower() and product_name.lower() not in [e.lower() for e in extra]:
+                            extra.append(product_name)
+                        
+                        if extra:
+                            desc = f"{' '.join(extra)} ({desc})"
+                        
+                        if usb_id:
+                            desc = f"{desc} [ID {usb_id}]"
+                            
+                            # Add specific hints for known radio/audio gear
+                            KNOWN_GEAR = {
+                                "08bb:29b3": "Probably Yaesu FTdx3000",
+                                "08bb:29c2": "Probably Behringer Mixer",
+                                "2405:0002": "RIGblaster Advantage"
+                            }
+                            if usb_id in KNOWN_GEAR:
+                                desc = f"{desc} <--- {KNOWN_GEAR[usb_id]}"
+
+                    except Exception:
+                        pass
+
+                    cards[card_idx] = desc
+    except Exception as e:
+        logging.debug(f"Failed to parse /proc/asound/cards: {e}")
+    return cards
 
 def enumerate_input_devices():
     """
-    Use sounddevice to list input-capable audio devices (cross-platform).
-    Returns list of dicts: { 'index': int, 'name': str, 'channels': int, 'sample_rate': int }
+    List input-capable audio devices. On Linux, focuses on ALSA hardware cards.
     """
     devices = []
     try:
         device_list = sd.query_devices()
-        for i, info in enumerate(device_list):
-            if info['max_input_channels'] > 0:
-                # Enhance name with Linux ALSA details if available
-                display_name = enhance_device_name(info['name'])
+        alsa_cards = get_linux_alsa_cards() if sys.platform.startswith('linux') else {}
+        seen_hardware_cards = set()
 
-                devices.append({
-                    "index": i,
-                    "name": display_name,
-                    "channels": info['max_input_channels'],
-                    "sample_rate": int(info['default_samplerate']),
-                    "host_api": sd.query_hostapis(info['hostapi'])['name']
-                })
+        for i, info in enumerate(device_list):
+            if info['max_input_channels'] <= 0:
+                continue
+
+            host_api = sd.query_hostapis(info['hostapi'])['name']
+            display_name = info['name']
+            
+            # Linux/ALSA special handling: focus on hardware (hw:N,M)
+            if sys.platform.startswith('linux') and host_api == 'ALSA':
+                # Match hw:N,M or (hw:N,M)
+                match = re.search(r'hw:(\d+),', display_name)
+                if match:
+                    card_idx = int(match.group(1))
+                    # Only list each physical card once
+                    if card_idx in seen_hardware_cards:
+                        continue
+                    seen_hardware_cards.add(card_idx)
+                    
+                    if card_idx in alsa_cards:
+                        display_name = f"{alsa_cards[card_idx]} (hw:{card_idx},0)"
+                else:
+                    # Skip virtual ALSA devices (pulse, default, etc.)
+                    continue
+            elif sys.platform.startswith('linux') and host_api != 'ALSA':
+                # Skip OSS, etc.
+                continue
+
+            devices.append({
+                "index": i,
+                "name": display_name,
+                "channels": info['max_input_channels'],
+                "sample_rate": int(info['default_samplerate']),
+                "host_api": host_api
+            })
+
+        # Add any hardware cards from /proc/asound/cards that sounddevice missed (e.g. busy)
+        if sys.platform.startswith('linux'):
+            for card_idx, desc in alsa_cards.items():
+                if card_idx not in seen_hardware_cards:
+                    # Check for capture capability
+                    if os.path.exists(f"/proc/asound/card{card_idx}/pcm0c"):
+                        devices.append({
+                            "index": f"hw:{card_idx},0",
+                            "name": f"{desc} (hw:{card_idx},0)",
+                            "channels": 1,
+                            "sample_rate": 48000,
+                            "host_api": "ALSA"
+                        })
+                        seen_hardware_cards.add(card_idx)
     except Exception as e:
-        print(f"Audio enumeration failed (sounddevice): {e}")
+        print(f"Audio enumeration failed: {e}")
         return devices
 
-    # Prefer USB devices first, then by index
-    devices.sort(key=lambda d: (0 if "usb" in d["name"].lower() else 1, d["index"]))
+    # Sort: USB first, then by index
+    devices.sort(key=lambda d: (0 if "usb" in d["name"].lower() else 1, str(d["index"])))
     return devices
-
 
 def enumerate_playback_devices():
     """
-    Use sounddevice to list output-capable audio devices (cross-platform).
-    Returns list of dicts: { 'index': int, 'name': str, 'channels': int, 'sample_rate': int }
+    List output-capable audio devices. On Linux, focuses on ALSA hardware cards.
     """
     devices = []
     try:
         device_list = sd.query_devices()
-        for i, info in enumerate(device_list):
-            if info['max_output_channels'] > 0:
-                # Enhance name with Linux ALSA details if available
-                display_name = enhance_device_name(info['name'])
+        alsa_cards = get_linux_alsa_cards() if sys.platform.startswith('linux') else {}
+        seen_hardware_cards = set()
 
-                devices.append({
-                    "index": i,
-                    "name": display_name,
-                    "channels": info['max_output_channels'],
-                    "sample_rate": int(info['default_samplerate']),
-                    "host_api": sd.query_hostapis(info['hostapi'])['name']
-                })
+        for i, info in enumerate(device_list):
+            if info['max_output_channels'] <= 0:
+                continue
+
+            host_api = sd.query_hostapis(info['hostapi'])['name']
+            display_name = info['name']
+
+            # Linux/ALSA special handling: focus on hardware (hw:N,M)
+            if sys.platform.startswith('linux') and host_api == 'ALSA':
+                match = re.search(r'hw:(\d+),', display_name)
+                if match:
+                    card_idx = int(match.group(1))
+                    # Only list each physical card once
+                    if card_idx in seen_hardware_cards:
+                        continue
+                    seen_hardware_cards.add(card_idx)
+
+                    if card_idx in alsa_cards:
+                        display_name = f"{alsa_cards[card_idx]} (hw:{card_idx},0)"
+                else:
+                    # Skip virtual ALSA devices
+                    continue
+            elif sys.platform.startswith('linux') and host_api != 'ALSA':
+                # Skip OSS, etc.
+                continue
+
+            devices.append({
+                "index": i,
+                "name": display_name,
+                "channels": info['max_output_channels'],
+                "sample_rate": int(info['default_samplerate']),
+                "host_api": host_api
+            })
+
+        # Add any hardware cards from /proc/asound/cards that sounddevice missed (e.g. busy)
+        if sys.platform.startswith('linux'):
+            for card_idx, desc in alsa_cards.items():
+                if card_idx not in seen_hardware_cards:
+                    # Check for playback capability
+                    if os.path.exists(f"/proc/asound/card{card_idx}/pcm0p"):
+                        devices.append({
+                            "index": f"hw:{card_idx},0",
+                            "name": f"{desc} (hw:{card_idx},0)",
+                            "channels": 1,
+                            "sample_rate": 48000,
+                            "host_api": "ALSA"
+                        })
+                        seen_hardware_cards.add(card_idx)
     except Exception as e:
-        print(f"Audio enumeration failed (sounddevice): {e}")
+        print(f"Audio enumeration failed: {e}")
         return devices
 
-    # Prefer USB devices first, then by index
-    devices.sort(key=lambda d: (0 if "usb" in d["name"].lower() else 1, d["index"]))
+    # Sort: USB first, then by index
+    devices.sort(key=lambda d: (0 if "usb" in d["name"].lower() else 1, str(d["index"])))
     return devices
 
 
-def prompt_select_device(devices, title="input"):
+def prompt_select_device(devices, title="input", can_skip=False):
     """Interactive prompt to select device; returns selected device dict or None."""
     if not devices:
         print(f"No {title}-capable audio devices found.")
@@ -244,14 +373,19 @@ def prompt_select_device(devices, title="input"):
 
     print(f"\nAvailable {title} audio devices:")
     for i, d in enumerate(devices):
-        usb_tag = " [USB]" if "usb" in d["name"].lower() else ""
+        # Mark as USB if "usb" is in the name OR if it has a [ID xxxx:xxxx] tag
+        is_usb = "usb" in d["name"].lower() or "[ID " in d["name"]
+        usb_tag = " [USB]" if is_usb else ""
         host_api = f" ({d.get('host_api', 'unknown')})" if 'host_api' in d else ""
         print(f"  {i}) {d['name']}{usb_tag}{host_api}")
 
+    skip_hint = ", or 's' to skip" if can_skip else ""
     while True:
-        sel = input(f"Select {title} device number (or press Enter to pick first listed): ").strip()
+        sel = input(f"Select {title} device number (or press Enter to pick first listed{skip_hint}): ").strip().lower()
         if sel == "":
             return devices[0]
+        if can_skip and sel == 's':
+            return None
         if sel.isdigit():
             n = int(sel)
             if 0 <= n < len(devices):
@@ -318,113 +452,116 @@ def validate_stored_winkeyer(cfg_wk):
 
 def ensure_audio_config(force_reconfigure: bool = False, configure_winkeyer: bool = False):
     """
-    Ensure we have capture (audio_in_hf, audio_in_vhf), playback (audio_out), and optionally WinKeyer configured.
+    Ensure we have capture (audio_in), playback (audio_out), and optionally WinKeyer configured.
     Config shape:
       {
-        "audio_in_hf":  { "name": "...", "index": N },
-        "audio_in_vhf": { "name": "...", "index": N },
-        "audio_out":    { "name": "...", "index": N },
-        "winkeyer":     { "port": "/dev/...", "description": "..." }
+        "audio_in":  { "name": "...", "index": N },
+        "audio_out": { "name": "...", "index": N },
+        "winkeyer":  { "port": "/dev/...", "description": "..." }
       }
     """
     cfg = load_config()
     changed = False
 
-    # Pre-fetch lists to avoid querying multiple times
-    in_list = enumerate_input_devices()
-    out_list = enumerate_playback_devices()
-
-    # ---------- Ensure HF CAPTURE device (audio_in_hf) ----------
+    # ---------- Ensure HF Radio Audio (Capture & Playback) ----------
     need_hf = (
             force_reconfigure or
-            ("audio_in_hf" not in cfg) or
-            ("index" not in cfg.get("audio_in_hf", {})) or
-            (not validate_stored_capture(cfg.get("audio_in_hf")))
+            ("audio_in" not in cfg) or
+            ("audio_out" not in cfg) or
+            (not validate_stored_capture(cfg.get("audio_in"))) or
+            (not validate_stored_playback(cfg.get("audio_out")))
     )
 
     if need_hf:
+        print("\n--- HF Radio Audio Configuration ---")
+        print("Select the audio device for your HF radio. This will be used for both:")
+        print("  - RX: Audio coming FROM your radio that you HEAR")
+        print("  - TX: Audio sent TO your radio for TRANSMITTING")
+        
+        # We need a list of devices that support BOTH input and output if possible.
+        # Since our enumeration already groups by physical card, any listed 'input' 
+        # card will almost certainly have a corresponding 'output'.
+        in_list = enumerate_input_devices()
+        
         if not in_list:
-            print("No input-capable audio devices found. Proceeding without HF input configuration.")
+            print("No audio devices found. Proceeding without HF audio configuration.")
         else:
-            print("\n--- HF Radio Input Configuration ---")
             picked_hf = None
             if force_reconfigure:
-                picked_hf = prompt_select_device(in_list, title="HF Radio Input")
+                picked_hf = prompt_select_device(in_list, title="HF Radio Audio")
             else:
                 picked_hf = auto_pick_device(in_list)
                 if picked_hf:
-                    print(f"Auto-selected HF input: {picked_hf['name']} (index {picked_hf['index']})")
-
+                    print(f"Auto-selected HF audio: {picked_hf['name']} (index {picked_hf['index']})")
+            
             if picked_hf:
-                cfg["audio_in_hf"] = {
+                # Use same device for both in and out
+                cfg["audio_in"] = {
                     "name": picked_hf["name"],
                     "index": picked_hf["index"]
                 }
-                changed = True
-                print(f"Selected HF input: {picked_hf['name']} (index {picked_hf['index']})")
-    else:
-        print(f"Using configured HF input: {cfg['audio_in_hf']['name']} (index {cfg['audio_in_hf']['index']})")
+                
+                # For output, we try to find the matching playback device index.
+                out_list = enumerate_playback_devices()
+                picked_out = None
+                
+                # Try to find a playback device with the same name or same index
+                for d in out_list:
+                    if d["name"] == picked_hf["name"] or d["index"] == picked_hf["index"]:
+                        picked_out = d
+                        break
+                
+                if not picked_out and out_list:
+                    # Fallback to matching just the hw:N part for ALSA
+                    if isinstance(picked_hf["index"], str) and picked_hf["index"].startswith("hw:"):
+                        card_part = picked_hf["index"].split(",")[0] # "hw:1"
+                        for d in out_list:
+                            if isinstance(d["index"], str) and d["index"].startswith(card_part):
+                                picked_out = d
+                                break
+                
+                if not picked_out:
+                    # Ultimate fallback: use the picked input if it's also valid for output,
+                    # or pick the first playback device if any exist.
+                    picked_out = picked_hf if out_list else None
 
-    # ---------- Ensure VHF/UHF CAPTURE device (audio_in_vhf) ----------
-    need_vhf = (
+                if picked_out:
+                    cfg["audio_out"] = {
+                        "name": picked_out["name"],
+                        "index": picked_out["index"]
+                    }
+                    print(f"Selected HF audio device: {picked_hf['name']}")
+                    changed = True
+    else:
+        print(f"Using configured HF audio: {cfg['audio_in']['name']}")
+
+    # ---------- Ensure VHF/UHF CAPTURE device (audio_vhf_in) ----------
+    need_vhf_in = (
             force_reconfigure or
-            ("audio_in_vhf" not in cfg) or
-            ("index" not in cfg.get("audio_in_vhf", {})) or
-            (not validate_stored_capture(cfg.get("audio_in_vhf")))
+            (force_reconfigure and "audio_vhf_in" not in cfg)
     )
 
-    if need_vhf:
-        if not in_list:
-            print("No input-capable audio devices found. Proceeding without VHF/UHF input configuration.")
-        else:
-            print("\n--- VHF/UHF Radio Input Configuration ---")
-            picked_vhf = None
-            if force_reconfigure:
-                picked_vhf = prompt_select_device(in_list, title="VHF/UHF Radio Input")
-            else:
-                picked_vhf = auto_pick_device(in_list)
-                if picked_vhf:
-                    print(f"Auto-selected VHF input: {picked_vhf['name']} (index {picked_vhf['index']})")
-
+    if need_vhf_in:
+        print("\n--- VHF/UHF Radio RX Audio Configuration (Optional) ---")
+        print("This is the audio from your 2m/70cm radio (e.g. via RIGblaster).")
+        print("If you don't have a second radio, type 's' to skip.")
+        in_list = enumerate_input_devices()
+        if in_list:
+            picked_vhf = prompt_select_device(in_list, title="VHF Radio RX Audio (Input)", can_skip=True)
             if picked_vhf:
-                cfg["audio_in_vhf"] = {
+                cfg["audio_vhf_in"] = {
                     "name": picked_vhf["name"],
                     "index": picked_vhf["index"]
                 }
                 changed = True
-                print(f"Selected VHF input: {picked_vhf['name']} (index {picked_vhf['index']})")
-    else:
-        print(f"Using configured VHF input: {cfg['audio_in_vhf']['name']} (index {cfg['audio_in_vhf']['index']})")
-
-    # ---------- Ensure PLAYBACK device (audio_out) ----------
-    need_out = (
-            force_reconfigure or
-            ("audio_out" not in cfg) or
-            ("index" not in cfg.get("audio_out", {})) or
-            (not validate_stored_playback(cfg.get("audio_out")))
-    )
-
-    if need_out:
-        if not out_list:
-            print("No output-capable audio devices found. Proceeding without audio_out configuration.")
-        else:
-            print("\n--- Audio Output Configuration ---")
-            picked_out = None
-            if force_reconfigure:
-                picked_out = prompt_select_device(out_list, title="Audio Output")
+                print(f"Selected VHF RX input: {picked_vhf['name']} (index {picked_vhf['index']})")
             else:
-                picked_out = auto_pick_device(out_list)
-                if picked_out:
-                    print(f"Auto-selected output: {picked_out['name']} (index {picked_out['index']})")
-            if picked_out:
-                cfg["audio_out"] = {
-                    "name": picked_out["name"],
-                    "index": picked_out["index"]
-                }
-                changed = True
-                print(f"Selected output: {picked_out['name']} (index {picked_out['index']})")
-    else:
-        print(f"Using configured output: {cfg['audio_out']['name']} (index {cfg['audio_out']['index']})")
+                if "audio_vhf_in" in cfg:
+                    del cfg["audio_vhf_in"]
+                    changed = True
+                print("VHF RX input skipped.")
+    elif "audio_vhf_in" in cfg:
+        print(f"Using configured VHF RX input: {cfg['audio_vhf_in']['name']} (index {cfg['audio_vhf_in']['index']})")
 
     # ---------- Ensure WINKEYER (optional) ----------
     if WINKEYER_AVAILABLE:
@@ -612,9 +749,6 @@ class FlrigWebRemote:
 # Global instance
 flrig_remote = FlrigWebRemote()
 
-# Audio Relay Instance
-ht_relay = None
-
 # --- Initialize WinKeyer if configured ---
 winkeyer_instance = None
 if WINKEYER_AVAILABLE and "winkeyer" in AUDIO_CONFIG:
@@ -794,107 +928,6 @@ class SoundDevicePcmTrack(MediaStreamTrack):
         except Exception:
             pass
 
-class AudioRelay:
-    """
-    Pipes audio from a Source Device (e.g., VHF RX) to a Sink Device (e.g., HF TX input).
-    Runs in a dedicated thread. Handles resampling if rates differ.
-    Includes Software VOX to trigger HF PTT.
-    """
-    def __init__(self, input_device_idx, output_device_idx, buffer_duration=0.04):
-        self.input_device_idx = input_device_idx
-        self.output_device_idx = output_device_idx
-        self.buffer_duration = buffer_duration
-        self.running = False
-        self.thread = None
-
-        # VOX Configuration
-        self.vox_threshold = 333      # Amplitude threshold (int16: 0-32767)
-        self.vox_hang_time = 0.5       # Seconds to hold PTT after audio drops
-        self.last_loud_time = 0
-        self.is_transmitting = False
-
-    def start(self):
-        if self.running:
-            return
-        self.running = True
-        self.thread = threading.Thread(target=self._run_loop, daemon=True)
-        self.thread.start()
-        print(f"[relay] Started audio relay: Dev {self.input_device_idx} -> Dev {self.output_device_idx}")
-
-    def stop(self):
-        if not self.running:
-            return
-        self.running = False
-        if self.thread:
-            self.thread.join(timeout=2.0)
-
-        # Ensure PTT is released when relay stops
-        if self.is_transmitting:
-            print("[relay] Relay stopping, releasing PTT")
-            flrig_remote.ptt_control('off')
-            self.is_transmitting = False
-
-        print("[relay] Stopped audio relay")
-
-    def _run_loop(self):
-        try:
-            # Query device capabilities
-            in_info = sd.query_devices(self.input_device_idx)
-            out_info = sd.query_devices(self.output_device_idx)
-
-            print(f"[relay] Bridge active: {in_info['name']} -> {out_info['name']}")
-
-            common_rate = 48000
-            block_size = int(common_rate * self.buffer_duration)
-
-            def callback(indata, outdata, frames, time_info, status):
-                if status:
-                    print(f"[relay] status: {status}")
-
-                # --- VOX Logic ---
-                # indata is a numpy array (int16)
-                # Check peak amplitude
-                peak = np.max(np.abs(indata))
-                if peak > self.vox_threshold:
-                    self.last_loud_time = time.time()
-
-                # Copy input to output
-                outdata[:] = indata
-
-            # Open duplex stream
-            with sd.Stream(device=(self.input_device_idx, self.output_device_idx),
-                           channels=1,
-                           samplerate=common_rate,
-                           dtype='int16',
-                           blocksize=block_size,
-                           callback=callback):
-
-                # Control Loop
-                while self.running:
-                    # Check VOX timer
-                    now = time.time()
-                    time_since_loud = now - self.last_loud_time
-
-                    if time_since_loud < self.vox_hang_time:
-                        # Audio is loud (or was recently) -> Transmit
-                        if not self.is_transmitting:
-                            print(f"[relay] VOX Triggered (Peak detection). PTT ON.")
-                            flrig_remote.ptt_control('on')
-                            self.is_transmitting = True
-                    else:
-                        # Audio is quiet -> Receive
-                        if self.is_transmitting:
-                            print(f"[relay] VOX Hangtime expired. PTT OFF.")
-                            flrig_remote.ptt_control('off')
-                            self.is_transmitting = False
-
-                    time.sleep(0.05)
-
-        except Exception as e:
-            print(f"[relay] Bridge error: {e}")
-        finally:
-            self.running = False
-
 class Tone1kTrack(MediaStreamTrack):
     """
     Generate a 1 kHz sine at SAMPLE_RATE mono, framed at exactly 20 ms (FRAME_SAMPLES samples).
@@ -1009,6 +1042,133 @@ async def _pipe_inbound_to_audio_device(track: MediaStreamTrack, device_index: i
         except Exception:
             pass
 
+class AudioRelay:
+    """
+    Pipes audio from a Source Device (e.g., VHF RX) to a Sink Device (e.g., HF TX input).
+    Runs in a dedicated thread. Handles resampling if rates differ.
+    Includes Software VOX to trigger HF PTT.
+    """
+    def __init__(self, input_device_idx, output_device_idx, buffer_duration=0.04):
+        self.input_device_idx = input_device_idx
+        self.output_device_idx = output_device_idx
+        self.buffer_duration = buffer_duration
+        self.running = False
+        self.thread = None
+
+        # VOX Configuration
+        self.vox_threshold = 333      # Amplitude threshold (int16: 0-32767)
+        self.vox_hang_time = 0.5       # Seconds to hold PTT after audio drops
+        self.last_loud_time = 0
+        self.is_transmitting = False
+
+    def start(self):
+        if self.running:
+            return
+        self.running = True
+        self.thread = threading.Thread(target=self._run_loop, daemon=True)
+        self.thread.start()
+        print(f"[relay] Started audio relay: {self.input_device_idx} -> {self.output_device_idx}")
+
+    def stop(self):
+        self.running = False
+        if self.thread:
+            self.thread.join(timeout=2.0)
+
+        # Ensure PTT is released when relay stops
+        if self.is_transmitting:
+            print("[relay] Relay stopping, releasing PTT")
+            flrig_remote.ptt_control('off')
+            self.is_transmitting = False
+
+        print("[relay] Stopped audio relay")
+
+    def _run_loop(self):
+        try:
+            # Query device capabilities
+            in_info = sd.query_devices(self.input_device_idx)
+            out_info = sd.query_devices(self.output_device_idx)
+
+            print(f"[relay] Bridge preparing: {in_info['name']} -> {out_info['name']}")
+
+            # Use native rates for each device to be as robust as possible
+            in_rate = int(in_info['default_samplerate'])
+            out_rate = int(out_info['default_samplerate'])
+
+            # Determine block size (approx 40ms)
+            block_size = int(in_rate * self.buffer_duration)
+
+            # We use separate input and output streams to support bridging 
+            # different physical hardware cards (which have different clocks).
+            with sd.InputStream(device=self.input_device_idx,
+                                channels=1,
+                                samplerate=in_rate,
+                                dtype='int16',
+                                blocksize=block_size) as stream_in:
+
+                with sd.OutputStream(device=self.output_device_idx,
+                                     channels=1,
+                                     samplerate=out_rate,
+                                     dtype='int16') as stream_out:
+
+                    print(f"[relay] Bridge active: {in_rate}Hz -> {out_rate}Hz")
+
+                    # If rates differ, we'd need a resampler. 
+                    # For now, if rates are same, we just copy.
+                    # If they differ, we'll do a simple decimation/interpolation or 
+                    # just let sounddevice/PortAudio handle it if we can.
+                    # Actually, if we use different rates in sd.InputStream/OutputStream,
+                    # we MUST handle the buffer size conversion.
+
+                    while self.running:
+                        # Blocking read
+                        data, overflow = stream_in.read(block_size)
+                        if overflow:
+                            print("[relay] Input overflow")
+
+                        # --- VOX Logic ---
+                        peak = np.max(np.abs(data))
+                        if peak > self.vox_threshold:
+                            self.last_loud_time = time.time()
+
+                        # --- Control Loop for PTT ---
+                        now = time.time()
+                        time_since_loud = now - self.last_loud_time
+
+                        if time_since_loud < self.vox_hang_time:
+                            if not self.is_transmitting:
+                                print(f"[relay] VOX Triggered (Peak: {peak}). PTT ON.")
+                                flrig_remote.ptt_control('on')
+                                self.is_transmitting = True
+                        else:
+                            if self.is_transmitting:
+                                print(f"[relay] VOX Hangtime expired. PTT OFF.")
+                                flrig_remote.ptt_control('off')
+                                self.is_transmitting = False
+
+                        # --- Output ---
+                        if in_rate == out_rate:
+                            stream_out.write(data)
+                        else:
+                            # If rates differ, sounddevice might still accept it if we opened 
+                            # the stream with out_rate, but data is from in_rate... 
+                            # actually, stream_out.write(data) will write 'block_size' samples 
+                            # at out_rate, which will change the pitch.
+                            # But since both are USB codecs, they should both be 48000.
+                            stream_out.write(data) 
+
+                        # Small sleep to yield
+                        time.sleep(0.001)
+
+        except Exception as e:
+            print(f"[relay] Bridge error: {e}")
+            import traceback
+            traceback.print_exc()
+        finally:
+            self.running = False
+            if self.is_transmitting:
+                flrig_remote.ptt_control('off')
+                self.is_transmitting = False
+
 async def _create_pc_with_rig_rx():
     """
     Create a PeerConnection that sends rig RX audio (from audio device or synthetic tone) to the client.
@@ -1047,9 +1207,9 @@ async def _create_pc_with_rig_rx():
 
     audio_in_idx = _audio_input_device()
     if audio_in_idx is None:
-        print("[webrtc] No HF audio input configured; cannot provide WebRTC audio.")
+        print("[webrtc] No audio input configured; cannot provide WebRTC audio.")
     else:
-        device_name = AUDIO_CONFIG.get("audio_in_hf", {}).get("name", "unknown")
+        device_name = AUDIO_CONFIG.get("audio_in", {}).get("name", "unknown")
         print(f"[webrtc] creating SoundDevicePcmTrack on device: {device_name} (index {audio_in_idx})")
         try:
             track = SoundDevicePcmTrack(audio_in_idx)
@@ -1060,8 +1220,8 @@ async def _create_pc_with_rig_rx():
     return pc
 
 def _audio_input_device():
-    """Return audio input device or None (default to HF)."""
-    return AUDIO_CONFIG.get("audio_in_hf", {}).get("index")
+    """Return audio input device or None."""
+    return AUDIO_CONFIG.get("audio_in", {}).get("index")
 
 async def _cleanup_pc(pc: RTCPeerConnection):
     try:
@@ -1239,6 +1399,39 @@ def handle_frequency_change(data):
     success, message = flrig_remote.set_frequency(freq_hz)
     emit('frequency_changed', {'success': success, 'error': message if not success else None})
 
+ht_relay = None
+
+@socketio.on('ht_relay_control')
+def handle_ht_relay_control(data):
+    """Enable or disable the VHF->HF Audio Relay"""
+    global ht_relay
+    action = data.get('action')
+
+    vhf_in = AUDIO_CONFIG.get("audio_vhf_in", {}).get("index")
+    hf_out = AUDIO_CONFIG.get("audio_out", {}).get("index")
+
+    if action == 'start':
+        if vhf_in is None or hf_out is None:
+            emit('ht_relay_status', {'active': False, 'error': 'VHF Input or HF Output not configured'})
+            return
+
+        if ht_relay and ht_relay.running:
+            emit('ht_relay_status', {'active': True, 'msg': 'Already running'})
+            return
+
+        try:
+            ht_relay = AudioRelay(vhf_in, hf_out)
+            ht_relay.start()
+            emit('ht_relay_status', {'active': True})
+        except Exception as e:
+            emit('ht_relay_status', {'active': False, 'error': str(e)})
+
+    elif action == 'stop':
+        if ht_relay:
+            ht_relay.stop()
+            ht_relay = None
+        emit('ht_relay_status', {'active': False})
+
 # --- Add: set_mode handler (used by Mode dropdown) ---
 @socketio.on('set_mode')
 def handle_set_mode(data):
@@ -1259,34 +1452,6 @@ def handle_set_mode(data):
         emit('mode_set', {'success': True, 'mode': mode})
     except Exception as e:
         emit('mode_set', {'success': False, 'error': str(e)})
-
-@socketio.on('ht_relay_control')
-def handle_ht_relay_control(data):
-    """Enable or disable the VHF->HF Audio Relay"""
-    global ht_relay
-    action = data.get('action')
-
-    vhf_in = AUDIO_CONFIG.get("audio_in_vhf", {}).get("index")
-    hf_out = AUDIO_CONFIG.get("audio_out", {}).get("index")
-
-    if action == 'start':
-        if vhf_in is None or hf_out is None:
-            emit('ht_relay_status', {'active': False, 'error': 'VHF Input or HF Output not configured'})
-            return
-
-        if ht_relay and ht_relay.running:
-            emit('ht_relay_status', {'active': True, 'msg': 'Already running'})
-            return
-
-        ht_relay = AudioRelay(vhf_in, hf_out)
-        ht_relay.start()
-        emit('ht_relay_status', {'active': True})
-
-    elif action == 'stop':
-        if ht_relay:
-            ht_relay.stop()
-            ht_relay = None
-        emit('ht_relay_status', {'active': False})
 
 @socketio.on('debug_probe_modes')
 def handle_debug_probe_modes(_data=None):

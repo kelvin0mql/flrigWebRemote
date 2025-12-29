@@ -192,6 +192,12 @@ def enumerate_winkeyer_ports():
     try:
         port_list = serial.tools.list_ports.comports()
         for p in sorted(port_list, key=lambda p: p.device):
+            # Filter out generic 'n/a' ports that aren't actually useful (like /dev/ttyS* on Linux)
+            if p.description == 'n/a' or not p.description:
+                # If it's a standard /dev/ttyS* on Linux and it's 'n/a', definitely skip it
+                if p.device.startswith('/dev/ttyS'):
+                    continue
+            
             info = {
                 "port": p.device,
                 "description": p.description,
