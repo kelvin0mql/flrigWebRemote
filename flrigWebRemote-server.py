@@ -12,8 +12,8 @@ import re
 import asyncio
 import logging
 from fractions import Fraction
-import numpy as np
 import sounddevice as sd
+import numpy as np
 import av
 from av.audio.resampler import AudioResampler
 import math
@@ -74,7 +74,7 @@ Examples:
     USE_TONE=1 python3 flrigWebRemote-server.py
 
 Requirements:
-    - flrig running and accessible at http://192.168.1.29:12345
+    - flrig running and accessible at http://127.0.0.1:12345
     - Python packages: flask, flask-socketio, sounddevice, av, aiortc
     - For WinKeyer support: pyserial package and winkeyer.py module
 
@@ -123,7 +123,6 @@ def load_config():
         except Exception as e:
             print(f"Warning: failed to read config: {e}")
     return {}
-
 
 def save_config(cfg: dict):
     try:
@@ -392,72 +391,15 @@ def prompt_select_device(devices, title="input", can_skip=False):
                 return devices[n]
         print("Invalid selection. Try again.")
 
-
-def auto_pick_device(devices):
-    """Non-interactive fallback: first USB if available, else first device."""
-    if not devices:
-        return None
-    return devices[0]
-
-def validate_stored_capture(cfg_audio_in):
-    """
-    Validate stored input device by attempting to query it.
-    """
-    idx = cfg_audio_in.get("index") if cfg_audio_in else None
-    if idx is None:
-        return False
-    try:
-        # Try to query the device
-        info = sd.query_devices(idx)
-        # Verify it still has input channels
-        return info['max_input_channels'] > 0
-    except Exception:
-        return False
-
-
-def validate_stored_playback(cfg_audio_out):
-    """
-    Validate stored output device by attempting to query it.
-    """
-    idx = cfg_audio_out.get("index") if cfg_audio_out else None
-    if idx is None:
-        return False
-    try:
-        # Try to query the device
-        info = sd.query_devices(idx)
-        # Verify it still has output channels
-        return info['max_output_channels'] > 0
-    except Exception:
-        return False
-
-
-def validate_stored_winkeyer(cfg_wk):
-    """
-    Validate stored WinKeyer port still exists.
-    """
-    if not WINKEYER_AVAILABLE:
-        return False
-
-    port = cfg_wk.get("port") if cfg_wk else None
-    if not port:
-        return False
-
-    try:
-        import serial.tools.list_ports
-        ports = serial.tools.list_ports.comports()
-        return any(p.device == port for p in ports)
-    except Exception:
-        return False
-
-
 def ensure_audio_config(force_reconfigure: bool = False, configure_winkeyer: bool = False):
     """
-    Ensure we have capture (audio_in), playback (audio_out), and optionally WinKeyer configured.
+    Ensure we have capture (audio_in_hf, audio_in_vhf), playback (audio_out), and optionally WinKeyer configured.
     Config shape:
       {
-        "audio_in":  { "name": "...", "index": N },
-        "audio_out": { "name": "...", "index": N },
-        "winkeyer":  { "port": "/dev/...", "description": "..." }
+        "audio_in_hf":  { "name": "...", "index": N },
+        "audio_in_vhf": { "name": "...", "index": N },
+        "audio_out":    { "name": "...", "index": N },
+        "winkeyer":     { "port": "/dev/...", "description": "..." }
       }
     """
     cfg = load_config()
@@ -466,9 +408,9 @@ def ensure_audio_config(force_reconfigure: bool = False, configure_winkeyer: boo
     # ---------- Ensure HF Radio Audio (Capture & Playback) ----------
     need_hf = (
             force_reconfigure or
-            ("audio_in" not in cfg) or
+            ("audio_in_hf" not in cfg) or
             ("audio_out" not in cfg) or
-            (not validate_stored_capture(cfg.get("audio_in"))) or
+            (not validate_stored_capture(cfg.get("audio_in_hf"))) or
             (not validate_stored_playback(cfg.get("audio_out")))
     )
 
@@ -496,7 +438,7 @@ def ensure_audio_config(force_reconfigure: bool = False, configure_winkeyer: boo
             
             if picked_hf:
                 # Use same device for both in and out
-                cfg["audio_in"] = {
+                cfg["audio_in_hf"] = {
                     "name": picked_hf["name"],
                     "index": picked_hf["index"]
                 }
@@ -533,12 +475,12 @@ def ensure_audio_config(force_reconfigure: bool = False, configure_winkeyer: boo
                     print(f"Selected HF audio device: {picked_hf['name']}")
                     changed = True
     else:
-        print(f"Using configured HF audio: {cfg['audio_in']['name']}")
+        print(f"Using configured HF audio: {cfg['audio_in_hf']['name']}")
 
-    # ---------- Ensure VHF/UHF CAPTURE device (audio_vhf_in) ----------
+    # ---------- Ensure VHF/UHF CAPTURE device (audio_in_vhf) ----------
     need_vhf_in = (
             force_reconfigure or
-            (force_reconfigure and "audio_vhf_in" not in cfg)
+            (force_reconfigure and "audio_in_vhf" not in cfg)
     )
 
     if need_vhf_in:
@@ -549,19 +491,19 @@ def ensure_audio_config(force_reconfigure: bool = False, configure_winkeyer: boo
         if in_list:
             picked_vhf = prompt_select_device(in_list, title="VHF Radio RX Audio (Input)", can_skip=True)
             if picked_vhf:
-                cfg["audio_vhf_in"] = {
+                cfg["audio_in_vhf"] = {
                     "name": picked_vhf["name"],
                     "index": picked_vhf["index"]
                 }
                 changed = True
                 print(f"Selected VHF RX input: {picked_vhf['name']} (index {picked_vhf['index']})")
             else:
-                if "audio_vhf_in" in cfg:
-                    del cfg["audio_vhf_in"]
+                if "audio_in_vhf" in cfg:
+                    del cfg["audio_in_vhf"]
                     changed = True
                 print("VHF RX input skipped.")
-    elif "audio_vhf_in" in cfg:
-        print(f"Using configured VHF RX input: {cfg['audio_vhf_in']['name']} (index {cfg['audio_vhf_in']['index']})")
+    elif "audio_in_vhf" in cfg:
+        print(f"Using configured VHF RX input: {cfg['audio_in_vhf']['name']} (index {cfg['audio_in_vhf']['index']})")
 
     # ---------- Ensure WINKEYER (optional) ----------
     if WINKEYER_AVAILABLE:
@@ -622,9 +564,11 @@ AUDIO_CONFIG = ensure_audio_config(force_reconfigure=FORCE_RECONFIG, configure_w
 # Optional: set USE_TONE=1 in the environment to send a 1 kHz test tone
 USE_TONE = (os.environ.get("USE_TONE", "0") == "1")
 
-# Audio sample rate for the whole media path (change to 48000 if needed)
-SAMPLE_RATE = 48000  # Changed from 24000 to match USB device
-FRAME_SAMPLES = 960  # 20 ms at 48 kHz (was 480 for 24 kHz)
+# Audio sample rate for the whole media path.
+# For SSB telephony (approx 3kHz bandwidth), 16kHz is more than enough 
+# and reduces processing overhead compared to 48kHz.
+SAMPLE_RATE = 16000  
+FRAME_SAMPLES = 320  # 20 ms at 16 kHz
 
 class FlrigWebRemote:
     def __init__(self):
@@ -749,6 +693,9 @@ class FlrigWebRemote:
 # Global instance
 flrig_remote = FlrigWebRemote()
 
+# Audio Relay Instance
+ht_relay = None
+
 # --- Initialize WinKeyer if configured ---
 winkeyer_instance = None
 if WINKEYER_AVAILABLE and "winkeyer" in AUDIO_CONFIG:
@@ -790,6 +737,19 @@ class SoundDevicePcmTrack(MediaStreamTrack):
         self._time_base = Fraction(1, self.sample_rate)
         self._pts = 0
         self._buffer = bytearray()
+        self._started = False
+        self._cushion_frames = 3  # Pre-buffer 60ms to handle jitter
+
+        # Simple IIR Filter state for 300-3400Hz bandpass
+        self._filter_hp_x1 = 0.0
+        self._filter_hp_y1 = 0.0
+        self._filter_lp_y1 = 0.0
+        
+        # Filter coefficients for 16kHz
+        # HP 300Hz: alpha = RC / (RC + dt) => approx 0.89
+        self._hp_alpha = 0.89
+        # LP 3400Hz: alpha = dt / (RC + dt) => approx 0.57
+        self._lp_alpha = 0.57
 
         # Audio queue for thread-safe communication
         self._audio_queue = asyncio.Queue()
@@ -798,7 +758,10 @@ class SoundDevicePcmTrack(MediaStreamTrack):
         try:
             device_info = sd.query_devices(device_index)
             native_rate = int(device_info['default_samplerate'])
-            print(f"[audio] Opening device {device_index}: {device_info['name']} @ {native_rate} Hz")
+            max_channels = device_info['max_input_channels']
+            self._input_channels = min(2, max_channels) if max_channels >= 1 else 1
+            
+            print(f"[audio] Opening device {device_index}: {device_info['name']} @ {native_rate} Hz ({self._input_channels} channels)")
         except Exception as e:
             print(f"[audio] Failed to query device {device_index}: {e}")
             self._closed = True
@@ -808,10 +771,10 @@ class SoundDevicePcmTrack(MediaStreamTrack):
         try:
             self.stream = sd.InputStream(
                 device=device_index,
-                channels=1,
+                channels=self._input_channels,
                 samplerate=native_rate,
                 dtype='int16',
-                blocksize=int(native_rate * 0.02),  # ~20ms blocks
+                blocksize=int(native_rate * 0.02),  # Use 20ms blocksize for consistency
                 callback=self._audio_callback
             )
 
@@ -838,47 +801,112 @@ class SoundDevicePcmTrack(MediaStreamTrack):
     def _audio_callback(self, indata, frames, time_info, status):
         """Called by sounddevice from audio thread"""
         if status:
-            print(f"[audio] status: {status}")
+            if status.input_overflow:
+                # Use logging instead of print to avoid console jitter
+                logging.debug(f"[audio] Input overflow: {status}")
+        
         if self._closed:
             return
 
-        # indata is numpy array of int16, shape (frames, 1)
-        audio_bytes = indata.tobytes()
+        if indata is None or frames == 0:
+            return
 
-        # Put in queue for async processing - use _aiortc_loop, not get_event_loop()
+        # 1. High-precision mono downmixing (float64)
+        if indata.shape[1] > 1:
+            mono_data = np.mean(indata.astype(np.float64), axis=1)
+        else:
+            mono_data = indata[:, 0].astype(np.float64)
+
+        # 2. Vectorized 300-3400Hz bandpass filter
+        # We use a 1st order IIR equivalent to the previous one but vectorized.
+        # HP @ 300Hz (alpha=0.89), LP @ 3400Hz (alpha=0.57)
+        
+        # High-pass
+        hp_out = np.zeros_like(mono_data)
+        x_prev = self._filter_hp_x1
+        y_prev = self._filter_hp_y1
+        for i in range(len(mono_data)):
+            y_prev = self._hp_alpha * (y_prev + mono_data[i] - x_prev)
+            x_prev = mono_data[i]
+            hp_out[i] = y_prev
+        self._filter_hp_x1 = x_prev
+        self._filter_hp_y1 = y_prev
+        
+        # Low-pass
+        lp_out = np.zeros_like(hp_out)
+        y_prev = self._filter_lp_y1
+        for i in range(len(hp_out)):
+            y_prev = y_prev + self._lp_alpha * (hp_out[i] - y_prev)
+            lp_out[i] = y_prev
+        self._filter_lp_y1 = y_prev
+
+        # Convert back to int16
+        audio_bytes = np.clip(lp_out, -32768, 32767).astype(np.int16).tobytes()
+
         try:
+            # 3. Smoother queue management: 
+            # If queue exceeds 15 frames (~300ms), drop the OLDEST frame to make room.
+            # This is less "fluttery" than clearing the whole queue.
+            if self._audio_queue.qsize() > 15:
+                try:
+                    self._audio_queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    pass
+
             _aiortc_loop.call_soon_threadsafe(
                 self._audio_queue.put_nowait, audio_bytes
             )
         except Exception as e:
-            print(f"[audio] queue error: {e}")
+            logging.error(f"[audio] Queue error: {e}")
 
     async def recv(self) -> av.AudioFrame:
         """Called by aiortc to get next audio frame"""
         try:
-            # Get audio from queue
+            # 4. Jitter Cushion (60ms = 3 frames)
+            if not self._started:
+                if self._audio_queue.qsize() < 3:
+                    return self._silence_frame()
+                logging.info(f"[audio] Starting playback (buffered {self._audio_queue.qsize()} frames)")
+                self._started = True
+
+            # 5. Graceful Catch-up: 
+            # If the queue is backed up (e.g. > 8 frames), we drop one frame 
+            # to slowly reduce latency without a massive "snap".
+            if self._audio_queue.qsize() > 8:
+                try:
+                    self._audio_queue.get_nowait()
+                    # Also trim local buffer to keep it tight
+                    if len(self._buffer) > self._frame_bytes:
+                        del self._buffer[:self._frame_bytes]
+                except asyncio.QueueEmpty:
+                    pass
+
+            # Get audio from queue and fill buffer
             while len(self._buffer) < self._frame_bytes:
                 if self._closed:
                     return self._silence_frame()
 
                 try:
-                    chunk = await asyncio.wait_for(self._audio_queue.get(), timeout=1.0)
+                    # Wait for a chunk
+                    chunk = await asyncio.wait_for(self._audio_queue.get(), timeout=0.04)
                 except asyncio.TimeoutError:
-                    print("[audio] recv timeout, returning silence")
                     return self._silence_frame()
 
                 # Resample if needed
                 if self._resampler:
-                    # Create PyAV frame from raw bytes
-                    input_samples = len(chunk) // 2  # int16 = 2 bytes per sample
+                    input_samples = len(chunk) // 2 
+                    if input_samples == 0: continue
                     input_frame = av.AudioFrame(format='s16', layout='mono', samples=input_samples)
                     input_frame.planes[0].update(chunk)
                     input_frame.sample_rate = self._input_rate
 
-                    # Resample
-                    resampled_frames = self._resampler.resample(input_frame)
-                    for rf in resampled_frames:
-                        self._buffer.extend(bytes(rf.planes[0]))
+                    try:
+                        resampled_frames = self._resampler.resample(input_frame)
+                        for rf in resampled_frames:
+                            self._buffer.extend(bytes(rf.planes[0]))
+                    except Exception as re:
+                        logging.error(f"[audio] Resampling error: {re}")
+                        continue
                 else:
                     self._buffer.extend(chunk)
 
@@ -896,7 +924,8 @@ class SoundDevicePcmTrack(MediaStreamTrack):
             return frame
 
         except Exception as e:
-            print(f"[audio] recv error: {e}")
+            if not self._closed:
+                print(f"[audio] Recv error: {e}")
             return self._silence_frame()
 
     def _silence_frame(self) -> av.AudioFrame:
@@ -927,6 +956,107 @@ class SoundDevicePcmTrack(MediaStreamTrack):
             super().stop()
         except Exception:
             pass
+
+class AudioRelay:
+    """
+    Pipes audio from a Source Device (e.g., VHF RX) to a Sink Device (e.g., HF TX input).
+    Runs in a dedicated thread. Handles resampling if rates differ.
+    Includes Software VOX to trigger HF PTT.
+    """
+    def __init__(self, input_device_idx, output_device_idx, buffer_duration=0.04):
+        self.input_device_idx = input_device_idx
+        self.output_device_idx = output_device_idx
+        self.buffer_duration = buffer_duration
+        self.running = False
+        self.thread = None
+
+        # VOX Configuration
+        self.vox_threshold = 333      # Amplitude threshold (int16: 0-32767)
+        self.vox_hang_time = 0.5       # Seconds to hold PTT after audio drops
+        self.last_loud_time = 0
+        self.is_transmitting = False
+
+    def start(self):
+        if self.running:
+            return
+        self.running = True
+        self.thread = threading.Thread(target=self._run_loop, daemon=True)
+        self.thread.start()
+        print(f"[relay] Started audio relay: Dev {self.input_device_idx} -> Dev {self.output_device_idx}")
+
+    def stop(self):
+        if not self.running:
+            return
+        self.running = False
+        if self.thread:
+            self.thread.join(timeout=2.0)
+
+        # Ensure PTT is released when relay stops
+        if self.is_transmitting:
+            print("[relay] Relay stopping, releasing PTT")
+            flrig_remote.ptt_control('off')
+            self.is_transmitting = False
+
+        print("[relay] Stopped audio relay")
+
+    def _run_loop(self):
+        try:
+            # Query device capabilities
+            in_info = sd.query_devices(self.input_device_idx)
+            out_info = sd.query_devices(self.output_device_idx)
+
+            print(f"[relay] Bridge active: {in_info['name']} -> {out_info['name']}")
+
+            common_rate = 48000
+            block_size = int(common_rate * self.buffer_duration)
+
+            def callback(indata, outdata, frames, time_info, status):
+                if status:
+                    print(f"[relay] status: {status}")
+
+                # --- VOX Logic ---
+                # indata is a numpy array (int16)
+                # Check peak amplitude
+                peak = np.max(np.abs(indata))
+                if peak > self.vox_threshold:
+                    self.last_loud_time = time.time()
+
+                # Copy input to output
+                outdata[:] = indata
+
+            # Open duplex stream
+            with sd.Stream(device=(self.input_device_idx, self.output_device_idx),
+                           channels=1,
+                           samplerate=common_rate,
+                           dtype='int16',
+                           blocksize=block_size,
+                           callback=callback):
+
+                # Control Loop
+                while self.running:
+                    # Check VOX timer
+                    now = time.time()
+                    time_since_loud = now - self.last_loud_time
+
+                    if time_since_loud < self.vox_hang_time:
+                        # Audio is loud (or was recently) -> Transmit
+                        if not self.is_transmitting:
+                            print(f"[relay] VOX Triggered (Peak detection). PTT ON.")
+                            flrig_remote.ptt_control('on')
+                            self.is_transmitting = True
+                    else:
+                        # Audio is quiet -> Receive
+                        if self.is_transmitting:
+                            print(f"[relay] VOX Hangtime expired. PTT OFF.")
+                            flrig_remote.ptt_control('off')
+                            self.is_transmitting = False
+
+                    time.sleep(0.05)
+
+        except Exception as e:
+            print(f"[relay] Bridge error: {e}")
+        finally:
+            self.running = False
 
 class Tone1kTrack(MediaStreamTrack):
     """
@@ -1042,133 +1172,6 @@ async def _pipe_inbound_to_audio_device(track: MediaStreamTrack, device_index: i
         except Exception:
             pass
 
-class AudioRelay:
-    """
-    Pipes audio from a Source Device (e.g., VHF RX) to a Sink Device (e.g., HF TX input).
-    Runs in a dedicated thread. Handles resampling if rates differ.
-    Includes Software VOX to trigger HF PTT.
-    """
-    def __init__(self, input_device_idx, output_device_idx, buffer_duration=0.04):
-        self.input_device_idx = input_device_idx
-        self.output_device_idx = output_device_idx
-        self.buffer_duration = buffer_duration
-        self.running = False
-        self.thread = None
-
-        # VOX Configuration
-        self.vox_threshold = 333      # Amplitude threshold (int16: 0-32767)
-        self.vox_hang_time = 0.5       # Seconds to hold PTT after audio drops
-        self.last_loud_time = 0
-        self.is_transmitting = False
-
-    def start(self):
-        if self.running:
-            return
-        self.running = True
-        self.thread = threading.Thread(target=self._run_loop, daemon=True)
-        self.thread.start()
-        print(f"[relay] Started audio relay: {self.input_device_idx} -> {self.output_device_idx}")
-
-    def stop(self):
-        self.running = False
-        if self.thread:
-            self.thread.join(timeout=2.0)
-
-        # Ensure PTT is released when relay stops
-        if self.is_transmitting:
-            print("[relay] Relay stopping, releasing PTT")
-            flrig_remote.ptt_control('off')
-            self.is_transmitting = False
-
-        print("[relay] Stopped audio relay")
-
-    def _run_loop(self):
-        try:
-            # Query device capabilities
-            in_info = sd.query_devices(self.input_device_idx)
-            out_info = sd.query_devices(self.output_device_idx)
-
-            print(f"[relay] Bridge preparing: {in_info['name']} -> {out_info['name']}")
-
-            # Use native rates for each device to be as robust as possible
-            in_rate = int(in_info['default_samplerate'])
-            out_rate = int(out_info['default_samplerate'])
-
-            # Determine block size (approx 40ms)
-            block_size = int(in_rate * self.buffer_duration)
-
-            # We use separate input and output streams to support bridging 
-            # different physical hardware cards (which have different clocks).
-            with sd.InputStream(device=self.input_device_idx,
-                                channels=1,
-                                samplerate=in_rate,
-                                dtype='int16',
-                                blocksize=block_size) as stream_in:
-
-                with sd.OutputStream(device=self.output_device_idx,
-                                     channels=1,
-                                     samplerate=out_rate,
-                                     dtype='int16') as stream_out:
-
-                    print(f"[relay] Bridge active: {in_rate}Hz -> {out_rate}Hz")
-
-                    # If rates differ, we'd need a resampler. 
-                    # For now, if rates are same, we just copy.
-                    # If they differ, we'll do a simple decimation/interpolation or 
-                    # just let sounddevice/PortAudio handle it if we can.
-                    # Actually, if we use different rates in sd.InputStream/OutputStream,
-                    # we MUST handle the buffer size conversion.
-
-                    while self.running:
-                        # Blocking read
-                        data, overflow = stream_in.read(block_size)
-                        if overflow:
-                            print("[relay] Input overflow")
-
-                        # --- VOX Logic ---
-                        peak = np.max(np.abs(data))
-                        if peak > self.vox_threshold:
-                            self.last_loud_time = time.time()
-
-                        # --- Control Loop for PTT ---
-                        now = time.time()
-                        time_since_loud = now - self.last_loud_time
-
-                        if time_since_loud < self.vox_hang_time:
-                            if not self.is_transmitting:
-                                print(f"[relay] VOX Triggered (Peak: {peak}). PTT ON.")
-                                flrig_remote.ptt_control('on')
-                                self.is_transmitting = True
-                        else:
-                            if self.is_transmitting:
-                                print(f"[relay] VOX Hangtime expired. PTT OFF.")
-                                flrig_remote.ptt_control('off')
-                                self.is_transmitting = False
-
-                        # --- Output ---
-                        if in_rate == out_rate:
-                            stream_out.write(data)
-                        else:
-                            # If rates differ, sounddevice might still accept it if we opened 
-                            # the stream with out_rate, but data is from in_rate... 
-                            # actually, stream_out.write(data) will write 'block_size' samples 
-                            # at out_rate, which will change the pitch.
-                            # But since both are USB codecs, they should both be 48000.
-                            stream_out.write(data) 
-
-                        # Small sleep to yield
-                        time.sleep(0.001)
-
-        except Exception as e:
-            print(f"[relay] Bridge error: {e}")
-            import traceback
-            traceback.print_exc()
-        finally:
-            self.running = False
-            if self.is_transmitting:
-                flrig_remote.ptt_control('off')
-                self.is_transmitting = False
-
 async def _create_pc_with_rig_rx():
     """
     Create a PeerConnection that sends rig RX audio (from audio device or synthetic tone) to the client.
@@ -1207,9 +1210,9 @@ async def _create_pc_with_rig_rx():
 
     audio_in_idx = _audio_input_device()
     if audio_in_idx is None:
-        print("[webrtc] No audio input configured; cannot provide WebRTC audio.")
+        print("[webrtc] No HF audio input configured; cannot provide WebRTC audio.")
     else:
-        device_name = AUDIO_CONFIG.get("audio_in", {}).get("name", "unknown")
+        device_name = AUDIO_CONFIG.get("audio_in_hf", {}).get("name", "unknown")
         print(f"[webrtc] creating SoundDevicePcmTrack on device: {device_name} (index {audio_in_idx})")
         try:
             track = SoundDevicePcmTrack(audio_in_idx)
@@ -1220,8 +1223,8 @@ async def _create_pc_with_rig_rx():
     return pc
 
 def _audio_input_device():
-    """Return audio input device or None."""
-    return AUDIO_CONFIG.get("audio_in", {}).get("index")
+    """Return audio input device or None (default to HF)."""
+    return AUDIO_CONFIG.get("audio_in_hf", {}).get("index")
 
 async def _cleanup_pc(pc: RTCPeerConnection):
     try:
@@ -1399,39 +1402,6 @@ def handle_frequency_change(data):
     success, message = flrig_remote.set_frequency(freq_hz)
     emit('frequency_changed', {'success': success, 'error': message if not success else None})
 
-ht_relay = None
-
-@socketio.on('ht_relay_control')
-def handle_ht_relay_control(data):
-    """Enable or disable the VHF->HF Audio Relay"""
-    global ht_relay
-    action = data.get('action')
-
-    vhf_in = AUDIO_CONFIG.get("audio_vhf_in", {}).get("index")
-    hf_out = AUDIO_CONFIG.get("audio_out", {}).get("index")
-
-    if action == 'start':
-        if vhf_in is None or hf_out is None:
-            emit('ht_relay_status', {'active': False, 'error': 'VHF Input or HF Output not configured'})
-            return
-
-        if ht_relay and ht_relay.running:
-            emit('ht_relay_status', {'active': True, 'msg': 'Already running'})
-            return
-
-        try:
-            ht_relay = AudioRelay(vhf_in, hf_out)
-            ht_relay.start()
-            emit('ht_relay_status', {'active': True})
-        except Exception as e:
-            emit('ht_relay_status', {'active': False, 'error': str(e)})
-
-    elif action == 'stop':
-        if ht_relay:
-            ht_relay.stop()
-            ht_relay = None
-        emit('ht_relay_status', {'active': False})
-
 # --- Add: set_mode handler (used by Mode dropdown) ---
 @socketio.on('set_mode')
 def handle_set_mode(data):
@@ -1452,6 +1422,34 @@ def handle_set_mode(data):
         emit('mode_set', {'success': True, 'mode': mode})
     except Exception as e:
         emit('mode_set', {'success': False, 'error': str(e)})
+
+@socketio.on('ht_relay_control')
+def handle_ht_relay_control(data):
+    """Enable or disable the VHF->HF Audio Relay"""
+    global ht_relay
+    action = data.get('action')
+
+    vhf_in = AUDIO_CONFIG.get("audio_in_vhf", {}).get("index")
+    hf_out = AUDIO_CONFIG.get("audio_out", {}).get("index")
+
+    if action == 'start':
+        if vhf_in is None or hf_out is None:
+            emit('ht_relay_status', {'active': False, 'error': 'VHF Input or HF Output not configured'})
+            return
+
+        if ht_relay and ht_relay.running:
+            emit('ht_relay_status', {'active': True, 'msg': 'Already running'})
+            return
+
+        ht_relay = AudioRelay(vhf_in, hf_out)
+        ht_relay.start()
+        emit('ht_relay_status', {'active': True})
+
+    elif action == 'stop':
+        if ht_relay:
+            ht_relay.stop()
+            ht_relay = None
+        emit('ht_relay_status', {'active': False})
 
 @socketio.on('debug_probe_modes')
 def handle_debug_probe_modes(_data=None):
@@ -1606,18 +1604,9 @@ async def _handle_webrtc_offer(offer: RTCSessionDescription):
     Create PC, prime audio (warm-up), set remote, create answer, wait ICE.
     """
     pc = await _create_pc_with_rig_rx()
-    # Warm up: pull a few frames so capture/resampler are primed before answering
-    for _ in range(6):
-        for sender in pc.getSenders():
-            tr = sender.track
-            if tr and hasattr(tr, "recv"):
-                try:
-                    await tr.recv()  # discard warm-up frames
-                except Exception:
-                    pass
-        await asyncio.sleep(0)
     # Tiny settle delay helps first-connect on Safari/iOS
-    await asyncio.sleep(0.03)
+    # We increase it slightly to ensure the capture thread has a head start
+    await asyncio.sleep(0.2)
     await pc.setRemoteDescription(offer)
     answer = await pc.createAnswer()
     await pc.setLocalDescription(answer)
