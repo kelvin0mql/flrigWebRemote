@@ -391,6 +391,41 @@ def prompt_select_device(devices, title="input", can_skip=False):
                 return devices[n]
         print("Invalid selection. Try again.")
 
+def validate_stored_capture(cfg_entry):
+    """Check if the stored capture device still exists."""
+    if not cfg_entry or "index" not in cfg_entry:
+        return False
+    devices = enumerate_input_devices()
+    for d in devices:
+        if d["index"] == cfg_entry["index"]:
+            return True
+    return False
+
+def validate_stored_playback(cfg_entry):
+    """Check if the stored playback device still exists."""
+    if not cfg_entry or "index" not in cfg_entry:
+        return False
+    devices = enumerate_playback_devices()
+    for d in devices:
+        if d["index"] == cfg_entry["index"]:
+            return True
+    return False
+
+def validate_stored_winkeyer(cfg_entry):
+    """Check if the stored WinKeyer port still exists."""
+    if not cfg_entry or "port" not in cfg_entry:
+        return False
+    return winkeyer.validate_port(cfg_entry["port"])
+
+def auto_pick_device(devices):
+    """Automatically pick the first USB device, or the first device if no USB."""
+    if not devices:
+        return None
+    for d in devices:
+        if "usb" in d["name"].lower() or "[ID " in d["name"]:
+            return d
+    return devices[0]
+
 def ensure_audio_config(force_reconfigure: bool = False, configure_winkeyer: bool = False):
     """
     Ensure we have capture (audio_in_hf, audio_in_vhf), playback (audio_out), and optionally WinKeyer configured.
@@ -404,6 +439,25 @@ def ensure_audio_config(force_reconfigure: bool = False, configure_winkeyer: boo
     """
     cfg = load_config()
     changed = False
+
+    # ---------- Migration and Cleanup of old keys ----------
+    # Map old keys to new canonical keys if new ones don't exist yet
+    if "audio_in" in cfg and "audio_in_hf" not in cfg:
+        cfg["audio_in_hf"] = cfg.pop("audio_in")
+        changed = True
+    
+    # audio_vhf_in was a previous name for audio_in_vhf
+    if "audio_vhf_in" in cfg and "audio_in_vhf" not in cfg:
+        cfg["audio_in_vhf"] = cfg.pop("audio_vhf_in")
+        changed = True
+
+    # Remove any remaining non-canonical keys
+    canonical_keys = {"audio_in_hf", "audio_out", "audio_in_vhf", "winkeyer"}
+    keys_to_remove = [k for k in cfg if k not in canonical_keys]
+    if keys_to_remove:
+        for k in keys_to_remove:
+            cfg.pop(k)
+        changed = True
 
     # ---------- Ensure HF Radio Audio (Capture & Playback) ----------
     need_hf = (
@@ -478,10 +532,8 @@ def ensure_audio_config(force_reconfigure: bool = False, configure_winkeyer: boo
         print(f"Using configured HF audio: {cfg['audio_in_hf']['name']}")
 
     # ---------- Ensure VHF/UHF CAPTURE device (audio_in_vhf) ----------
-    need_vhf_in = (
-            force_reconfigure or
-            (force_reconfigure and "audio_in_vhf" not in cfg)
-    )
+    # VHF is optional, so we only prompt if forced.
+    need_vhf_in = force_reconfigure
 
     if need_vhf_in:
         print("\n--- VHF/UHF Radio RX Audio Configuration (Optional) ---")
